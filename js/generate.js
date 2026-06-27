@@ -167,6 +167,8 @@ const state = {
   staffList: [],
   requests: [],       // shift_requests（希望休）
   assignments: [],     // shift_assignments（生成結果）
+  prevAssignments: [], // 前月の shift_assignments（月跨ぎ連勤チェック用）
+  prevRequests: [],    // 前月の shift_requests（月跨ぎ連勤チェック用：調剤など）
   monthlySettings: {},
   currentYear: initYear,
   currentMonth: initMonth,
@@ -559,11 +561,32 @@ async function loadRequests(yearMonth) {
   return data || [];
 }
 
+// "YYYY-MM" の前月を "YYYY-MM" で返す
+function getPrevYearMonth(yearMonth) {
+  const [year, month] = yearMonth.split('-').map(Number);
+  let py = year, pm = month - 1;
+  if (pm < 1) { pm = 12; py--; }
+  return `${py}-${String(pm).padStart(2, '0')}`;
+}
+
+// 前月のシフト確定結果・希望休を読み込む（月跨ぎ連勤チェック用）
+async function loadPrevMonthContext(yearMonth) {
+  const prevYM = getPrevYearMonth(yearMonth);
+  const [assignRes, prevReqs] = await Promise.all([
+    supabase.from('ogi_shift_assignments').select('*').eq('year_month', prevYM),
+    loadRequests(prevYM),
+  ]);
+  if (assignRes.error) { console.error(assignRes.error); state.prevAssignments = []; }
+  else { state.prevAssignments = assignRes.data || []; }
+  state.prevRequests = prevReqs || [];
+}
+
 async function loadExistingAssignments() {
   const yearMonth = getCurrentYearMonth();
 
-  // 描画のための希望休データを先にロード
+  // 描画のための希望休データ・前月コンテキストを先にロード
   state.requests = await loadRequests(yearMonth);
+  await loadPrevMonthContext(yearMonth);
 
   const { data, error } = await supabase
     .from('ogi_shift_assignments')
@@ -623,6 +646,7 @@ async function handleGenerate() {
   try {
     const yearMonth = getCurrentYearMonth();
     state.requests = await loadRequests(yearMonth);
+    await loadPrevMonthContext(yearMonth);
 
     // スコアリング生成：複数回試行して最高スコアを採用
     const TRIAL_COUNT = 30;
@@ -688,9 +712,50 @@ function _restDays(assignments, staffId) {
 function _countPattern(assignments, staffId, pattern) {
   return _staffAssignments(assignments, staffId).filter(a => a.work_pattern === pattern).length;
 }
-function _maxConsecutiveWork(assignments, staffId) {
+// 前月末から継続している連勤日数を集計（月跨ぎ連勤対策）
+//   streakWork       : 前月末からの連続「実働」日数（調剤は含めない＝_maxConsecutiveWork相当）
+//   streakAll        : 前月末からの連続「実働＋調剤」日数（_maxConsecutiveWorkIncludingDispense相当）
+//   includesDispense : streakAll に調剤日が含まれるか
+//   prevLastDate     : 前月末日（"YYYY-MM-DD"）
+// 前月末日が休みなら連勤は途切れているため streak は 0 になる。
+function _getPrevCarryover(staffId, yearMonth) {
+  const prevYM = getPrevYearMonth(yearMonth);
+  const [py, pm] = prevYM.split('-').map(Number);
+  const prevDays = new Date(py, pm, 0).getDate();
+  const prevLastDate = `${prevYM}-${String(prevDays).padStart(2, '0')}`;
+
+  const workSet = new Set();
+  state.prevAssignments.forEach(a => {
+    if (a.staff_id === staffId && a.work_pattern && a.work_pattern !== '') workSet.add(a.date);
+  });
+  const dispenseSet = new Set();
+  state.prevRequests.forEach(r => {
+    if (r.staff_id === staffId && r.request_type === 'dispense') dispenseSet.add(r.date);
+  });
+
+  let streakWork = 0, streakAll = 0, includesDispense = false, workBroken = false;
+  const d = new Date(prevLastDate + 'T00:00:00');
+  while (true) {
+    const ds = formatDate(d);
+    const isWork = workSet.has(ds);
+    const isDispense = dispenseSet.has(ds);
+    if (!isWork && !isDispense) break; // 休み→連勤途切れ
+    streakAll++;
+    if (isDispense) includesDispense = true;
+    // 実働のみの連勤は、調剤日（＝実働なし）が挟まると途切れる
+    if (!workBroken) {
+      if (isWork) streakWork++;
+      else workBroken = true;
+    }
+    d.setDate(d.getDate() - 1);
+  }
+  return { streakWork, streakAll, includesDispense, prevLastDate };
+}
+function _maxConsecutiveWork(assignments, staffId, yearMonth) {
   const sorted = _staffAssignments(assignments, staffId).sort((a, b) => a.date.localeCompare(b.date));
   let max = 0, count = 0;
+  // 前月末からの連勤を引き継ぐ（当月初日が休みなら最初のループで count=0 にリセットされる）
+  if (yearMonth) count = _getPrevCarryover(staffId, yearMonth).streakWork;
   for (const a of sorted) {
     if (a.work_pattern && a.work_pattern !== '') { count++; max = Math.max(max, count); }
     else { count = 0; }
@@ -702,6 +767,8 @@ function _maxConsecutiveWorkIncludingDispense(assignments, staffId, yearMonth, d
   const dispenses = state.requests.filter(r => r.staff_id === staffId && r.request_type === 'dispense').map(r => r.date);
   const allWorkDates = new Set([...works, ...dispenses]);
   let max = 0, currentConsec = 0;
+  // 前月末からの連勤（調剤含む）を引き継ぐ
+  currentConsec = _getPrevCarryover(staffId, yearMonth).streakAll;
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
     if (allWorkDates.has(dateStr)) { currentConsec++; max = Math.max(max, currentConsec); }
@@ -816,7 +883,7 @@ function runAllChecks(assignments, yearMonth) {
   if (ono) {
     const restCount = rest(ono.id).length;
     const allEbisu = work(ono.id).every(a => a.work_pattern === PATTERNS.EMPLOYEE_EBISU);
-    const consec = _maxConsecutiveWork(assignments, ono.id);
+    const consec = _maxConsecutiveWork(assignments, ono.id, yearMonth);
     const restDateList = rest(ono.id).map(a => a.date).sort();
     let nonSundayPairs = 0;
     for (let i = 0; i < restDateList.length - 1; i++) {
@@ -847,7 +914,7 @@ function runAllChecks(assignments, yearMonth) {
     const allShibuya = work(shinoda.id).every(a =>
       a.work_pattern === PATTERNS.EMPLOYEE_SHIBUYA || a.work_pattern === PATTERNS.DEV
     );
-    const consec = _maxConsecutiveWork(assignments, shinoda.id);
+    const consec = _maxConsecutiveWork(assignments, shinoda.id, yearMonth);
     const pairs = _checkConsecutiveRestPairs(assignments, shinoda.id);
     const restDateList = rest(shinoda.id).map(a => a.date).sort();
     let adjacentPairs = 0;
@@ -875,7 +942,7 @@ function runAllChecks(assignments, yearMonth) {
   // --- 徳永（パート薬剤師） ---
   if (tokunaga) {
     const workCount = work(tokunaga.id).length;
-    const consec = _maxConsecutiveWork(assignments, tokunaga.id);
+    const consec = _maxConsecutiveWork(assignments, tokunaga.id, yearMonth);
     const consecDispense = _maxConsecutiveWorkIncludingDispense(assignments, tokunaga.id, yearMonth, daysInMonth);
     const sundays = _countSundays(assignments, tokunaga.id);
     let storeViolations = 0;
@@ -910,7 +977,7 @@ function runAllChecks(assignments, yearMonth) {
   // --- 事務パート ---
   for (const staff of officeStaff) {
     const workCount = work(staff.id).length;
-    const consec = _maxConsecutiveWork(assignments, staff.id);
+    const consec = _maxConsecutiveWork(assignments, staff.id, yearMonth);
     const cond = staff.work_conditions || {};
     const mainStore = (staff.store_priority?.ebisu ?? 99) <= 2 ? 'ebisu' : 'shibuya';
     const crossCount = _countCrossStore(assignments, staff.id, mainStore);
@@ -1046,6 +1113,21 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
   const requestMap = {};
   state.requests.forEach(r => { requestMap[`${r.staff_id}_${r.date}`] = r; });
 
+  // 前月の出勤情報（月跨ぎ連勤チェック用）
+  // prevWorkByStaff   : staffId → Set(前月の実働日 "YYYY-MM-DD")
+  // prevDispenseByStaff: `staffId_date` → true（前月の調剤希望日）
+  const prevWorkByStaff = {};
+  const prevDispenseByStaff = {};
+  state.prevAssignments.forEach(a => {
+    if (a.work_pattern && a.work_pattern !== '') {
+      if (!prevWorkByStaff[a.staff_id]) prevWorkByStaff[a.staff_id] = new Set();
+      prevWorkByStaff[a.staff_id].add(a.date);
+    }
+  });
+  state.prevRequests.forEach(r => {
+    if (r.request_type === 'dispense') prevDispenseByStaff[`${r.staff_id}_${r.date}`] = true;
+  });
+
   // 結果格納
   const result = [];
   const warnings = [];
@@ -1055,16 +1137,23 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
   activeStaff.forEach(s => {
     const dispenseCount = state.requests.filter(r => r.staff_id === s.id && r.request_type === 'dispense').length;
     workCounts[s.id] = { total: dispenseCount, sundays: 0, weekly: {}, consecutiveDays: 0, lastWorkedDate: null };
+    // 前月末から連勤が続いている場合は、その連勤数を初期値として引き継ぐ
+    // （当月初日も勤務になると連勤が継続加算され、上限超過を防げる）
+    const carry = _getPrevCarryover(s.id, yearMonth);
+    if (carry.streakWork > 0) {
+      workCounts[s.id].consecutiveDays = carry.streakWork;
+      workCounts[s.id].lastWorkedDate = carry.prevLastDate; // 前月末日
+    }
   });
 
   // 社員の公休日を事前計算
   // ①小野を先に計算（日曜定休の制約が強い）
   // ②信太は小野の公休日を避けて配置（希望休重複は許容）
   const employeeRestDays = {};
-  if (ono) employeeRestDays[ono.id] = computeRestDays(ono, dates, daysOff, requestMap, new Set(), randomize);
+  if (ono) employeeRestDays[ono.id] = computeRestDays(ono, dates, daysOff, requestMap, new Set(), randomize, yearMonth);
   if (shinoda) {
     const onoRestDays = ono ? employeeRestDays[ono.id] : new Set();
-    employeeRestDays[shinoda.id] = computeRestDays(shinoda, dates, daysOff, requestMap, onoRestDays, randomize);
+    employeeRestDays[shinoda.id] = computeRestDays(shinoda, dates, daysOff, requestMap, onoRestDays, randomize, yearMonth);
   }
 
   // パートの勤務追跡（週単位）
@@ -1102,9 +1191,11 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     pd.setDate(pd.getDate() - 1);
     while (true) {
       const pdStr = formatDate(pd);
-      const pWork = result.find(a => a.staff_id === staffId && a.date === pdStr && a.work_pattern !== '');
+      // 当月の生成結果に加え、前月確定分（実働・調剤）も遡って参照（月跨ぎ連勤対策）
+      const pWork = result.find(a => a.staff_id === staffId && a.date === pdStr && a.work_pattern !== '')
+        || (prevWorkByStaff[staffId] && prevWorkByStaff[staffId].has(pdStr));
       const pReq = requestMap[`${staffId}_${pdStr}`];
-      const pDispense = pReq && pReq.request_type === 'dispense';
+      const pDispense = (pReq && pReq.request_type === 'dispense') || !!prevDispenseByStaff[`${staffId}_${pdStr}`];
 
       if (pWork || pDispense) {
         pastStreak++;
@@ -1549,10 +1640,12 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
 }
 
 // 社員の公休日を計算
-function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new Set(), randomize = false) {
+function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new Set(), randomize = false, yearMonth = null) {
   const restDays = new Set();
   const isEbisuEmployee = employee.assigned_store === 'ebisu';
   const isShibuyaEmployee = employee.assigned_store === 'shibuya';
+  // 前月末からの連勤（月跨ぎ連勤対策）。当月先頭の連勤判定の初期値に使う。
+  const prevStreak = yearMonth ? _getPrevCarryover(employee.id, yearMonth).streakWork : 0;
 
   // 1. 希望休（off）を先に公休としてカウント
   for (const { dateStr } of dates) {
@@ -1624,7 +1717,8 @@ function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new 
       // 安全策：6連勤以上が発生しないように、公休の間隔を補正する
       const enforceGaps = () => {
         let maxWorkStreak = 0;
-        let p = null;
+        // 前月末からの連勤を初期値に引き継ぐ（月跨ぎで6連勤以上にならないよう先頭から補正）
+        let p = prevStreak > 0 ? prevStreak : null;
         for (const d of dates) {
           if (restDays.has(d.dateStr)) { p = null; continue; }
           if (d.dow === 0 && isEbisuEmployee) continue;
