@@ -2087,6 +2087,21 @@ function renderGanttFooter(daysInMonth, sortedStaff) {
   let ebisuRow = '<td class="staff-name" style="font-size:0.75rem;">恵比寿</td>';
   let shibuyaRow = '<td class="staff-name" style="font-size:0.75rem;">渋谷</td>';
 
+  // 充足セルのクラス・表示（p=薬剤師数, o=事務数）
+  function getStatusClass(p, o) {
+    if (p === 1 && o === 1) return '';
+    // 薬か事務のどちらかが0.5で、かつ0や2以上（NG）がない場合は「警告（黄色）」にする
+    const hasHalf = p === 0.5 || o === 0.5;
+    const hasZeroOrExceed = p === 0 || o === 0 || p > 1 || o > 1;
+    if (hasHalf && !hasZeroOrExceed) return ' cell-warn';
+    return ' cell-ng'; // 全く足りない、または多すぎる場合は赤
+  }
+  function getSpan(val, role) {
+    if (val === 1) return `${role}${val}`;
+    if (val === 0.5) return `<span class="count-warn">${role}0.5</span>`;
+    return `<span class="count-ng">${role}${val}</span>`;
+  }
+
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${state.currentYear}-${String(state.currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const dt = new Date(state.currentYear, state.currentMonth, d);
@@ -2111,31 +2126,16 @@ function renderGanttFooter(daysInMonth, sortedStaff) {
       else if (isHalfShibuya) { if (isPharm) sp += 0.5; else so += 0.5; }
     });
 
+    // 恵比寿は日曜定休 → 休表記。渋谷は日曜も営業するため常に充足を表示する。
     if (isSunday) {
       ebisuRow += '<td style="background:var(--color-surface-2);font-size:0.75rem;color:var(--color-text-muted);">休</td>';
-      shibuyaRow += '<td style="background:var(--color-surface-2);font-size:0.75rem;color:var(--color-text-muted);">休</td>';
     } else {
-      function getStatusClass(p, o) {
-        if (p === 1 && o === 1) return '';
-        // 薬か事務のどちらかが0.5で、かつ0や2以上（NG）がない場合は「警告（黄色）」にする
-        const hasHalf = p === 0.5 || o === 0.5;
-        const hasZeroOrExceed = p === 0 || o === 0 || p > 1 || o > 1;
-        if (hasHalf && !hasZeroOrExceed) return ' cell-warn';
-        return ' cell-ng'; // 全く足りない、または多すぎる場合は赤
-      }
-
-      function getSpan(val, role) {
-        if (val === 1) return `${role}${val}`;
-        if (val === 0.5) return `<span class="count-warn">${role}0.5</span>`;
-        return `<span class="count-ng">${role}${val}</span>`;
-      }
-
       const eCellClass = getStatusClass(ep, eo);
       ebisuRow += `<td class="${eCellClass.trim()}">${getSpan(ep, '薬')}<br>${getSpan(eo, '事')}</td>`;
-
-      const sCellClass = getStatusClass(sp, so);
-      shibuyaRow += `<td class="${sCellClass.trim()}">${getSpan(sp, '薬')}<br>${getSpan(so, '事')}</td>`;
     }
+
+    const sCellClass = getStatusClass(sp, so);
+    shibuyaRow += `<td class="${sCellClass.trim()}">${getSpan(sp, '薬')}<br>${getSpan(so, '事')}</td>`;
   }
 
   const eSummary = '<td class="gantt-summary-col"></td>';
