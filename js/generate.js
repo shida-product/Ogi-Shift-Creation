@@ -1354,6 +1354,15 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
   // ◯開発カウント（月1-2回まで）
   let devCount = 0;
 
+  // ---- 渋谷の事務枠だけ連続ブロック維持（数日ブロックで交代させる） ----
+  // 渋谷は本庄（穴埋め＝target無し）が混じるため、放置すると諫早＝前半集中／本庄＝後半集中に偏る。
+  // 前日に渋谷枠を担当した人へブロック上限までボーナスを与え、数日ブロックで諫早⇄本庄を交代させる。
+  // 恵比寿（木庭・中村）は全員レギュラーで偏らないため、従来方式を維持しブロック化しない（getScore参照）。
+  const OFFICE_BLOCK_MARGIN = 1;          // 連勤MAXより何日手前で交代させるか（MAX到達による偏り回避）
+  const OFFICE_CONTINUITY_BONUS = 6000;   // 継続中に上乗せするスコア（debt±1.5日相当で交代）
+  const shibuyaSlot = { staffId: null, run: 0 }; // 前日の渋谷事務枠担当
+  const SHIBUYA_OFFICE_PATTERNS = new Set([PATTERNS.PART_SHIBUYA, PATTERNS.AM_PART_SHIBUYA, PATTERNS.PM_PART_SHIBUYA]);
+
   // ============ メインループ ============
   for (const { dateStr, dow } of dates) {
     const isSunday = dow === 0;
@@ -1484,7 +1493,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       const currentDay = new Date(dateStr + 'T00:00:00').getDate();
       const progress = currentDay / daysInMonth; // 月の進捗率 (0〜1)
 
-      // 優先度 + ペース配分でソート
+      // 優先度 + ペース配分 + 連続ブロック維持でソート
       const sorted = [...candidates].sort((a, b) => {
         const getScore = (staff) => {
           const cond = staff.work_conditions || {};
@@ -1492,33 +1501,46 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
           const priority = staff.store_priority?.[store] ?? 99;
           const actual = workCounts[staff.id].total;
 
+          // === 恵比寿チーム：従来のグラデーション方式（ブロック化しない） ===
+          // 木庭・中村は全員が目標持ちレギュラー（穴埋め枠なし）で偏りが構造的に出ないため、
+          // 従来どおり達成率ベースのグラデーションで評価する。
+          if (store === 'ebisu') {
+            if (target === 0) return 10000 - priority;       // 目標なし（応援の本庄等）は穴埋め
+            if (actual >= target) return 0 - priority;       // 目標達成済み → 下げる
+            const completionRate = Math.min(actual / target, 1.0);
+            const base = 20000 - (completionRate * 10000);
+            const expected = target * progress;
+            const debt = expected - actual;
+            return base + (debt * 100) + (10 - priority);
+          }
+
+          // === 渋谷チーム：ペース配分＋連続ブロック ===
+          // 穴埋め（本庄＝約10000）を基準線に、「月初からの遅れ(debt)」だけでスコアを上下させる。
+          //   ・ペースより遅れている → 本庄より上 ＝ レギュラー（諫早）が出る
+          //   ・ペース通り/前倒し     → 本庄より下 ＝ 本庄に譲る
+          // これにより本庄を穴埋め（target無し）のまま残しつつ、両者の出勤が月全体に分散する。
+          let score;
           if (target === 0) {
-            // 目標なし（本庄さんなど）は穴埋め要員
-            return 10000 - priority;
+            score = 10000 - priority;          // 目標なし（本庄）は穴埋め要員：一定スコア
+          } else if (actual >= target) {
+            score = 0 - priority;              // 目標達成済み → 穴埋めより下げる
+          } else {
+            const expected = target * progress; // 今日時点であるべき消化数
+            const debt = expected - actual;     // ＋なら遅れ、－なら前倒し
+            score = 10000 + (debt * 4000) + (10 - priority);
           }
 
-          if (actual >= target) {
-            // 目標達成済み → 穴埋めメンバーよりさらに優先度を下げる
-            return 0 - priority;
+          // === 連続ブロック維持（ヒステリシス） ===
+          // 前日この枠を担当した人へ、ブロック上限までボーナスを与え日替わり交代を防ぐ。
+          // 上限は「連勤MAXより OFFICE_BLOCK_MARGIN 日手前」。連勤MAXに達してからの強制休
+          // （＝1日だけ相手が入る歯抜け）を避け、MAX到達前に自発交代させて偏りを防ぐ。
+          // 交代相手にも継続ボーナスが効くので、休む側はまとまった連休になる。
+          const consecMax = cond.max_consecutive_days || 5;
+          const blockCap = Math.max(2, consecMax - OFFICE_BLOCK_MARGIN);
+          if (shibuyaSlot.staffId === staff.id && shibuyaSlot.run < blockCap) {
+            score += OFFICE_CONTINUITY_BONUS;
           }
-
-          // === グラデーション方式のスコアリング ===
-          // 達成率が上がるにつれ、ベーススコアが 20000 → 10000 へ徐々に下降する。
-          // これにより、目標に近づいたレギュラーのスコアが本庄（10000）と
-          // 自然に競合し始め、本庄にも出番が回るようになる。
-          //
-          // 例（諫早 target=18）:
-          //   actual= 0 (0%)  → base=20000 → 絶対優先
-          //   actual= 9 (50%) → base=15000 → まだ優先
-          //   actual=15 (83%) → base=11667 → 本庄に近づいてきた
-          //   actual=17 (94%) → base=10556 → 本庄とほぼ同格、出番を譲り始める
-          const completionRate = Math.min(actual / target, 1.0);
-          const base = 20000 - (completionRate * 10000);
-
-          const expected = target * progress;
-          const debt = expected - actual;
-
-          return base + (debt * 100) + (10 - priority);
+          return score;
         };
         return getScore(b) - getScore(a);
       });
@@ -1589,6 +1611,15 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
         }
       }
     }
+
+    // 渋谷の連続ブロック維持：今日の渋谷事務枠担当を記録（翌日の継続ボーナス判定用）
+    const shibuyaOfficeAssign = result.find(a => a.date === dateStr
+      && SHIBUYA_OFFICE_PATTERNS.has(a.work_pattern)
+      && officeStaff.some(s => s.id === a.staff_id));
+    const shibuyaSid = shibuyaOfficeAssign ? shibuyaOfficeAssign.staff_id : null;
+    if (shibuyaSid && shibuyaSlot.staffId === shibuyaSid) shibuyaSlot.run++;
+    else if (shibuyaSid) { shibuyaSlot.staffId = shibuyaSid; shibuyaSlot.run = 1; }
+    else { shibuyaSlot.staffId = null; shibuyaSlot.run = 0; }
 
     // 未配置の事務パートは休日
     // ただし 平日扱いの希望日（AM可・PM可・りんご等）で外れた日は「平日（勤務なし）」として記録（所定休日にしない）
