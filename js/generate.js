@@ -751,30 +751,45 @@ function _getPrevCarryover(staffId, yearMonth) {
   }
   return { streakWork, streakAll, includesDispense, prevLastDate };
 }
-function _maxConsecutiveWork(assignments, staffId, yearMonth) {
+// opts.withCarry=true のとき { max, carry, carriedIntoMax } を返す（既定は max のみ返す＝後方互換）
+//   carry          : 前月末からの繰り越し連勤日数
+//   carriedIntoMax : 最大連勤区間が前月繰り越しを含むか（注記の要否判定に使う）
+function _maxConsecutiveWork(assignments, staffId, yearMonth, opts = {}) {
   const sorted = _staffAssignments(assignments, staffId).sort((a, b) => a.date.localeCompare(b.date));
-  let max = 0, count = 0;
-  // 前月末からの連勤を引き継ぐ（当月初日が休みなら最初のループで count=0 にリセットされる）
-  if (yearMonth) count = _getPrevCarryover(staffId, yearMonth).streakWork;
+  const carry = yearMonth ? _getPrevCarryover(staffId, yearMonth).streakWork : 0;
+  let max = 0, count = carry;          // 前月末からの連勤を引き継ぐ（当月初日が休みなら最初のループで count=0 にリセットされる）
+  let runHasCarry = carry > 0;         // 現在の連勤区間が前月繰り越しを含むか
+  let carriedIntoMax = false;          // max を記録した区間が前月繰り越しを含むか
   for (const a of sorted) {
-    if (a.work_pattern && a.work_pattern !== '') { count++; max = Math.max(max, count); }
-    else { count = 0; }
+    if (a.work_pattern && a.work_pattern !== '') {
+      count++;
+      if (count > max) { max = count; carriedIntoMax = runHasCarry; }
+    } else { count = 0; runHasCarry = false; }
   }
-  return max;
+  return opts.withCarry ? { max, carry, carriedIntoMax } : max;
 }
-function _maxConsecutiveWorkIncludingDispense(assignments, staffId, yearMonth, daysInMonth) {
+function _maxConsecutiveWorkIncludingDispense(assignments, staffId, yearMonth, daysInMonth, opts = {}) {
   const works = _workDays(assignments, staffId).map(a => a.date);
   const dispenses = state.requests.filter(r => r.staff_id === staffId && r.request_type === 'dispense').map(r => r.date);
   const allWorkDates = new Set([...works, ...dispenses]);
-  let max = 0, currentConsec = 0;
-  // 前月末からの連勤（調剤含む）を引き継ぐ
-  currentConsec = _getPrevCarryover(staffId, yearMonth).streakAll;
+  const carry = _getPrevCarryover(staffId, yearMonth).streakAll; // 前月末からの連勤（調剤含む）を引き継ぐ
+  let max = 0, currentConsec = carry;
+  let runHasCarry = carry > 0;
+  let carriedIntoMax = false;
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${yearMonth}-${String(d).padStart(2, '0')}`;
-    if (allWorkDates.has(dateStr)) { currentConsec++; max = Math.max(max, currentConsec); }
-    else { currentConsec = 0; }
+    if (allWorkDates.has(dateStr)) {
+      currentConsec++;
+      if (currentConsec > max) { max = currentConsec; carriedIntoMax = runHasCarry; }
+    } else { currentConsec = 0; runHasCarry = false; }
   }
-  return max;
+  return opts.withCarry ? { max, carry, carriedIntoMax } : max;
+}
+// 連勤チェック項目の表示テキスト。最大連勤区間が前月末からの連勤を含む場合だけ「（前月末から+N）」を付す。
+function _consecValueText(detail) {
+  return detail.carriedIntoMax && detail.carry > 0
+    ? `${detail.max}日（前月末から+${detail.carry}）`
+    : `${detail.max}日`;
 }
 function _countSundays(assignments, staffId) {
   return _workDays(assignments, staffId).filter(a => new Date(a.date + 'T00:00:00').getDay() === 0).length;
@@ -883,7 +898,8 @@ function runAllChecks(assignments, yearMonth) {
   if (ono) {
     const restCount = rest(ono.id).length;
     const allEbisu = work(ono.id).every(a => a.work_pattern === PATTERNS.EMPLOYEE_EBISU);
-    const consec = _maxConsecutiveWork(assignments, ono.id, yearMonth);
+    const consecD = _maxConsecutiveWork(assignments, ono.id, yearMonth, { withCarry: true });
+    const consec = consecD.max;
     const restDateList = rest(ono.id).map(a => a.date).sort();
     let nonSundayPairs = 0;
     for (let i = 0; i < restDateList.length - 1; i++) {
@@ -900,7 +916,7 @@ function runAllChecks(assignments, yearMonth) {
       name: ono.name, section: '薬剤師', items: [
         { id: 'ono-store', tag: '絶対', status: allEbisu ? 'pass' : 'fail', text: '恵比寿固定', value: allEbisu ? '○' : '他店あり', scoreDelta: 0 },
         { id: 'ono-rest', tag: '絶対', status: restCount === daysOff ? 'pass' : 'warn', text: `公休数 (${daysOff}日)`, value: `${restCount}日`, scoreDelta: 0 },
-        { id: 'ono-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: `${consec}日`, scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
+        { id: 'ono-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: _consecValueText(consecD), scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
         { id: 'ono-sundaypair', tag: '高', status: sundayPairs >= 1 ? 'pass' : 'warn', text: '日曜隣接2連休', value: `${sundayPairs}回`, scoreDelta: 0 },
         { id: 'ono-nonsunpair', tag: '高', status: nonSundayPairs === 0 ? 'pass' : 'warn', text: '日曜日を含まない連休', value: nonSundayPairs === 0 ? 'なし○' : `${nonSundayPairs}回`, scoreDelta: nonSundayPairs > 0 ? -nonSundayPairs * 20 : 0 },
       ]
@@ -914,7 +930,8 @@ function runAllChecks(assignments, yearMonth) {
     const allShibuya = work(shinoda.id).every(a =>
       a.work_pattern === PATTERNS.EMPLOYEE_SHIBUYA || a.work_pattern === PATTERNS.DEV
     );
-    const consec = _maxConsecutiveWork(assignments, shinoda.id, yearMonth);
+    const consecD = _maxConsecutiveWork(assignments, shinoda.id, yearMonth, { withCarry: true });
+    const consec = consecD.max;
     const pairs = _checkConsecutiveRestPairs(assignments, shinoda.id);
     const restDateList = rest(shinoda.id).map(a => a.date).sort();
     let adjacentPairs = 0;
@@ -928,7 +945,7 @@ function runAllChecks(assignments, yearMonth) {
       { id: 'shinoda-store', tag: '絶対', status: allShibuya ? 'pass' : 'fail', text: '渋谷固定', value: allShibuya ? '○' : '他店あり', scoreDelta: 0 },
       { id: 'shinoda-rest', tag: '絶対', status: restCount === daysOff ? 'pass' : 'warn', text: `公休数 (${daysOff}日)`, value: `${restCount}日`, scoreDelta: 0 },
       { id: 'shinoda-dev', tag: '絶対', status: devCount <= 2 ? 'pass' : 'fail', text: '開発業務の割り当て回数（0~2回まで）', value: `${devCount}回`, scoreDelta: 0 },
-      { id: 'shinoda-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: `${consec}日`, scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
+      { id: 'shinoda-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: _consecValueText(consecD), scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
       { id: 'shinoda-pairs', tag: '低', status: pairs >= 2 ? 'pass' : 'warn', text: '2連休取得回数（シフトに余裕がある場合）', value: `${pairs}回`, scoreDelta: pairs > 0 ? pairs * 5 : 0 },
       { id: 'shinoda-adjpair', tag: '高', status: adjacentPairs === 0 ? 'pass' : 'warn', text: '連休同士の過度な近接回避', value: adjacentPairs === 0 ? '○' : `${adjacentPairs}箇所`, scoreDelta: adjacentPairs > 0 ? -adjacentPairs * 20 : 0 },
     ];
@@ -942,8 +959,10 @@ function runAllChecks(assignments, yearMonth) {
   // --- 徳永（パート薬剤師） ---
   if (tokunaga) {
     const workCount = work(tokunaga.id).length;
-    const consec = _maxConsecutiveWork(assignments, tokunaga.id, yearMonth);
-    const consecDispense = _maxConsecutiveWorkIncludingDispense(assignments, tokunaga.id, yearMonth, daysInMonth);
+    const consecD = _maxConsecutiveWork(assignments, tokunaga.id, yearMonth, { withCarry: true });
+    const consec = consecD.max;
+    const consecDispD = _maxConsecutiveWorkIncludingDispense(assignments, tokunaga.id, yearMonth, daysInMonth, { withCarry: true });
+    const consecDispense = consecDispD.max;
     const sundays = _countSundays(assignments, tokunaga.id);
     let storeViolations = 0;
     for (const a of work(tokunaga.id)) {
@@ -957,8 +976,8 @@ function runAllChecks(assignments, yearMonth) {
       name: tokunaga.name, section: '薬剤師', items: [
         { id: 'tok-days', tag: '絶対', status: workCount >= 15 && workCount <= 22 ? 'pass' : 'fail', text: '勤務日数（基本17日/MAX22日）', value: `${workCount}日`, scoreDelta: 0 },
         { id: 'tok-sun', tag: '絶対', status: sundays <= 2 ? 'pass' : 'fail', text: '日曜出勤：2回まで', value: `${sundays}回`, scoreDelta: 0 },
-        { id: 'tok-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: `${consec}日`, scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
-        { id: 'tok-disp', tag: '絶対', status: consecDispense <= 5 ? 'pass' : 'fail', text: '「調剤」の希望休を含めた連続勤務日数：5連勤まで', value: `${consecDispense}日`, scoreDelta: consecDispense > 5 ? -50 * (consecDispense - 5) : 0 },
+        { id: 'tok-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: _consecValueText(consecD), scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
+        { id: 'tok-disp', tag: '絶対', status: consecDispense <= 5 ? 'pass' : 'fail', text: '「調剤」の希望休を含めた連続勤務日数：5連勤まで', value: _consecValueText(consecDispD), scoreDelta: consecDispense > 5 ? -50 * (consecDispense - 5) : 0 },
         { id: 'tok-store', tag: '絶対', status: storeViolations === 0 ? 'pass' : 'warn', text: '日曜は渋谷、それ以外は小野の出勤状況に合わせた店舗配置', value: storeViolations === 0 ? '○' : `${storeViolations}日逸脱`, scoreDelta: 0 },
       ]
     };
@@ -977,7 +996,8 @@ function runAllChecks(assignments, yearMonth) {
   // --- 事務パート ---
   for (const staff of officeStaff) {
     const workCount = work(staff.id).length;
-    const consec = _maxConsecutiveWork(assignments, staff.id, yearMonth);
+    const consecD = _maxConsecutiveWork(assignments, staff.id, yearMonth, { withCarry: true });
+    const consec = consecD.max;
     const cond = staff.work_conditions || {};
     const mainStore = (staff.store_priority?.ebisu ?? 99) <= 2 ? 'ebisu' : 'shibuya';
     const crossCount = _countCrossStore(assignments, staff.id, mainStore);
@@ -1014,7 +1034,7 @@ function runAllChecks(assignments, yearMonth) {
     }
 
     const maxConsec = cond.max_consecutive_days || 5;
-    items.push({ id: `${staff.id}-consec`, tag: '絶対', status: consec <= maxConsec ? 'pass' : 'fail', text: `連勤：${maxConsec}連勤まで`, value: `${consec}日`, scoreDelta: consec > maxConsec ? -50 * (consec - maxConsec) : 0 });
+    items.push({ id: `${staff.id}-consec`, tag: '絶対', status: consec <= maxConsec ? 'pass' : 'fail', text: `連勤：${maxConsec}連勤まで`, value: _consecValueText(consecD), scoreDelta: consec > maxConsec ? -50 * (consec - maxConsec) : 0 });
     items.push({ id: `${staff.id}-cross`, tag: '中', status: crossCount === 0 ? 'pass' : 'warn', text: `他店舗勤務（${storeName}メイン）`, value: `${crossCount}日`, scoreDelta: crossCount > 0 ? -crossCount * 15 : 0 });
     const priText = `恵:${pri.ebisu ?? '-'} 渋:${pri.shibuya ?? '-'}`;
     items.push({ id: `${staff.id}-pri`, status: 'pass', text: '配置優先順位', value: priText, scoreDelta: 0 });
