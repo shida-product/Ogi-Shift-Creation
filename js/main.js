@@ -724,12 +724,22 @@ function renderCalendar() {
         else if (prevReq && nextReq) extraCls = ' is-bar-middle';
         else if (prevReq && !nextReq) extraCls = ' is-bar-end';
 
-        // 勤務確定は生成画面と同じ表現：スタッフ色のまま、バー下端に店舗カラーの実線を引く
-        let workCls = '';
-        if (r.request_type === 'work_ebisu') workCls = ' cal-evt--fixed-ebisu';
-        else if (r.request_type === 'work_shibuya') workCls = ' cal-evt--fixed-shibuya';
+        // 勤務確定は中抜き表示：白背景＋スタッフ色の枠線・文字（塗りつぶしの希望休と区別）
+        const isWork = (r.request_type === 'work_ebisu' || r.request_type === 'work_shibuya');
+        let styleAttr;
+        if (isWork) {
+          // パレット色（淡背景＋濃文字）のスタッフは濃い方を枠線色に使う
+          const line = (text === '#ffffff') ? bg : text;
+          // 連日バーの繋ぎ目に縦線が出ないよう、辺ごとに枠線（inset shadow）を組み立てる
+          const edges = [`inset 0 1.5px 0 ${line}`, `inset 0 -1.5px 0 ${line}`];
+          if (extraCls !== ' is-bar-middle' && extraCls !== ' is-bar-end') edges.push(`inset 1.5px 0 0 ${line}`);
+          if (extraCls !== ' is-bar-middle' && extraCls !== ' is-bar-start') edges.push(`inset -1.5px 0 0 ${line}`);
+          styleAttr = ` style="background:var(--color-surface);color:${line};box-shadow:${edges.join(',')};"`;
+        } else {
+          styleAttr = ` style="background:${bg};color:${text};"`;
+        }
 
-        eventsHtml += `<span class="cal-evt${workCls}${extraCls}" style="background:${bg};color:${text};">${escapeHtml(lastName + typeLabel)}</span>`;
+        eventsHtml += `<span class="cal-evt${extraCls}"${styleAttr}>${escapeHtml(lastName + typeLabel)}</span>`;
       });
     }
 

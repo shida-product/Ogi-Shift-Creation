@@ -353,9 +353,6 @@
 .cal-evt--ringo    { background: #fee2e2;                color: #E73B3B;            }
 .cal-evt--work-ebisu   { background: #2D4FBF;            color: #fff;               }
 .cal-evt--work-shibuya { background: #E879A8;            color: #fff;               }
-/* 勤務確定（月グリッド）：生成画面と同じ表現。スタッフ色のバー下端に店舗カラーの実線3px */
-.cal-evt--fixed-ebisu   { box-shadow: inset 0 -3px 0 0 #2D4FBF; }
-.cal-evt--fixed-shibuya { box-shadow: inset 0 -3px 0 0 #E879A8; }
 .cal-evt--more     { background: var(--color-surface-2); color: var(--color-text-muted); text-align: center; }
 /* 空きレーンのスペーサー：高さを確保して下の行がずれないようにする */
 .cal-evt--spacer   { background: transparent; pointer-events: none; visibility: hidden; }
