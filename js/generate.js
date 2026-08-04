@@ -37,8 +37,8 @@ const REQUEST_TYPE_CSS = {
   pm: 'bg-stripe-pm',
   dispense: 'bg-stripe-dispense',
   ringo: 'bg-stripe-ringo',
-  work_ebisu: 'bg-stripe-work-ebisu',
-  work_shibuya: 'bg-stripe-work-shibuya',
+  work_ebisu: 'mark-fixed-ebisu',
+  work_shibuya: 'mark-fixed-shibuya',
   other: 'bg-stripe-other',
 };
 

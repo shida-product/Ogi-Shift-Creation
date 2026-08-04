@@ -406,25 +406,21 @@ tr.is-group-divider td {
   ) !important;
 }
 
-/* 勤務確定（ハード制約）：店舗カラーのストライプ */
-.bg-stripe-work-ebisu {
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    rgba(45, 79, 191, 0.45) 3px,
-    rgba(45, 79, 191, 0.45) 6px
-  ) !important;
+/* ---------- 勤務確定（ハード制約） ---------- */
+/* 希望休の網掛けと質を変えるため、背景は使わずセル下端に店舗カラーの実線を引く。
+   is-warning（inset box-shadow）・is-manual（::after）と衝突しないよう ::before で描画する。 */
+.day-cell.mark-fixed-ebisu::before,
+.day-cell.mark-fixed-shibuya::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  pointer-events: none;
 }
-.bg-stripe-work-shibuya {
-  background: repeating-linear-gradient(
-    45deg,
-    transparent,
-    transparent 3px,
-    rgba(232, 121, 168, 0.50) 3px,
-    rgba(232, 121, 168, 0.50) 6px
-  ) !important;
-}
+.day-cell.mark-fixed-ebisu::before { background: #2D4FBF; }
+.day-cell.mark-fixed-shibuya::before { background: #E879A8; }
 
 .bg-warning-light {
   background-color: var(--color-danger-bg) !important;
