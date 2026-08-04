@@ -264,7 +264,8 @@
 /* カレンダーグリッド */
 .calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  /* minmax(0, 1fr)：長いラベルがあっても列の等幅を維持（1frだとmin-contentで列が広がる） */
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 1px;
   background: var(--color-border);
   border-radius: var(--radius-md);

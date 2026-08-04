@@ -710,8 +710,9 @@ function renderCalendar() {
         else if (r.request_type === 'pm') typeLabel = ' PM可';
         else if (r.request_type === 'dispense') typeLabel = ' 調剤';
         else if (r.request_type === 'ringo') typeLabel = ' りんご';
-        else if (r.request_type === 'work_ebisu') typeLabel = ' 勤務（恵比寿）';
-        else if (r.request_type === 'work_shibuya') typeLabel = ' 勤務（渋谷）';
+        // 店舗名まで載せると列幅が崩れるため、月グリッドでは「勤務」のみ（店舗は日付詳細で確認）
+        else if (r.request_type === 'work_ebisu') typeLabel = ' 勤務';
+        else if (r.request_type === 'work_shibuya') typeLabel = ' 勤務';
         else if (r.request_type === 'other') typeLabel = ' その他';
 
         // 前後日と繋がっているか判定し、バーの角丸・表示を調整
