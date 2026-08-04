@@ -535,6 +535,8 @@ function renderGantt() {
           case 'pm': cls = 'marker--pm'; label = 'PM'; break;
           case 'dispense': cls = 'marker--dispense'; label = '調'; break;
           case 'ringo': cls = 'marker--ringo'; label = 'り'; break;
+          case 'work_ebisu': cls = 'marker--work-ebisu'; label = '恵'; break;
+          case 'work_shibuya': cls = 'marker--work-shibuya'; label = '渋'; break;
           default: cls = 'marker--other'; label = '他'; break;
         }
         
@@ -708,6 +710,8 @@ function renderCalendar() {
         else if (r.request_type === 'pm') typeLabel = ' PM可';
         else if (r.request_type === 'dispense') typeLabel = ' 調剤';
         else if (r.request_type === 'ringo') typeLabel = ' りんご';
+        else if (r.request_type === 'work_ebisu') typeLabel = ' 勤務（恵比寿）';
+        else if (r.request_type === 'work_shibuya') typeLabel = ' 勤務（渋谷）';
         else if (r.request_type === 'other') typeLabel = ' その他';
 
         // 前後日と繋がっているか判定し、バーの角丸・表示を調整
@@ -772,6 +776,8 @@ function showDayDetail(dateStr) {
         case 'pm':       type = 'PM可';    evtCls = 'cal-evt--pm';       break;
         case 'dispense': type = '調剤';    evtCls = 'cal-evt--dispense'; break;
         case 'ringo':    type = 'りんご';  evtCls = 'cal-evt--ringo';    break;
+        case 'work_ebisu':   type = '勤務（恵比寿）'; evtCls = 'cal-evt--work-ebisu';   break;
+        case 'work_shibuya': type = '勤務（渋谷）';   evtCls = 'cal-evt--work-shibuya'; break;
         default:         type = 'その他';  evtCls = 'cal-evt--other';    break;
       }
       const note = r.note
@@ -916,6 +922,8 @@ function renderOtherList() {
     else if (g.request_type === 'pm') { typeLabel = 'PM可'; itemCls = 'other-list__item--pm'; }
     else if (g.request_type === 'dispense') { typeLabel = '調剤'; itemCls = 'other-list__item--dispense'; }
     else if (g.request_type === 'ringo') { typeLabel = 'りんご'; itemCls = 'other-list__item--ringo'; }
+    else if (g.request_type === 'work_ebisu') { typeLabel = '勤務（恵比寿）'; itemCls = 'other-list__item--work-ebisu'; }
+    else if (g.request_type === 'work_shibuya') { typeLabel = '勤務（渋谷）'; itemCls = 'other-list__item--work-shibuya'; }
     else if (g.request_type === 'off') { typeLabel = '休み'; itemCls = 'other-list__item--off'; }
     else { typeLabel = 'その他'; itemCls = 'other-list__item--other'; }
 

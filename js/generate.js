@@ -22,8 +22,13 @@ const REQUEST_TYPE_LABEL = {
   pm: 'PM可（午後のみ出勤可）',
   dispense: '調剤（他薬局での調剤業務）',
   ringo: 'りんご',
+  work_ebisu: '勤務（恵比寿）',
+  work_shibuya: '勤務（渋谷）',
   other: 'その他の希望',
 };
+
+// 勤務確定リクエスト → 店舗
+const WORK_REQUEST_STORE = { work_ebisu: 'ebisu', work_shibuya: 'shibuya' };
 
 // リクエスト種別 → ストライプCSSクラス
 const REQUEST_TYPE_CSS = {
@@ -32,14 +37,16 @@ const REQUEST_TYPE_CSS = {
   pm: 'bg-stripe-pm',
   dispense: 'bg-stripe-dispense',
   ringo: 'bg-stripe-ringo',
+  work_ebisu: 'bg-stripe-work-ebisu',
+  work_shibuya: 'bg-stripe-work-shibuya',
   other: 'bg-stripe-other',
 };
 
 // リクエスト種別 → 絵文字アイコン
-const REQUEST_TYPE_ICON = { off: '🔴', am: '🟢', pm: '🔵', dispense: '🟠', ringo: '', other: '🟡' };
+const REQUEST_TYPE_ICON = { off: '🔴', am: '🟢', pm: '🔵', dispense: '🟠', ringo: '', work_ebisu: '🔷', work_shibuya: '🌸', other: '🟡' };
 
 // CSV出力時に「平日」として扱うリクエスト種別（それ以外は「所定休日」）
-const CSV_WEEKDAY_REQUEST_TYPES = ['am', 'pm', 'ringo'];
+const CSV_WEEKDAY_REQUEST_TYPES = ['am', 'pm', 'ringo', 'work_ebisu', 'work_shibuya'];
 const STORES = { EBISU: 'ebisu', SHIBUYA: 'shibuya' };
 
 // 勤務パターン定義
@@ -891,6 +898,22 @@ function runAllChecks(assignments, yearMonth) {
     { id: 'G2', tag: '絶対', status: violations === 0 ? 'pass' : 'fail', text: '希望休が全て反映されている', value: violations === 0 ? '○' : `${violations}件違反`, scoreDelta: 0 },
   );
 
+  // G3. 勤務確定反映（希望休と同列のハード制約。店舗まで一致しているか）
+  const fixedRequests = state.requests.filter(r => WORK_REQUEST_STORE[r.request_type] && r.date.startsWith(yearMonth));
+  const EBISU_PATTERNS = [PATTERNS.EMPLOYEE_EBISU, PATTERNS.PART_EBISU, PATTERNS.AM_PART_EBISU, PATTERNS.PM_PART_EBISU];
+  const SHIBUYA_PATTERNS = [PATTERNS.EMPLOYEE_SHIBUYA, PATTERNS.PART_SHIBUYA, PATTERNS.AM_PART_SHIBUYA, PATTERNS.PM_PART_SHIBUYA];
+  let fixedViolations = 0;
+  for (const req of fixedRequests) {
+    const assign = assignments.find(a => a.staff_id === req.staff_id && a.date === req.date);
+    const expected = WORK_REQUEST_STORE[req.request_type] === STORES.EBISU ? EBISU_PATTERNS : SHIBUYA_PATTERNS;
+    if (!assign || !expected.includes(assign.work_pattern)) fixedViolations++;
+  }
+  if (fixedRequests.length > 0) {
+    globalItems.push(
+      { id: 'G3', tag: '絶対', status: fixedViolations === 0 ? 'pass' : 'fail', text: `勤務確定が全て反映されている（${fixedRequests.length}件）`, value: fixedViolations === 0 ? '○' : `${fixedViolations}件違反`, scoreDelta: 0 },
+    );
+  }
+
   // ===== スタッフ別チェック =====
   const staffChecks = {}; // staffId → { name, section, items[] }
 
@@ -1133,6 +1156,25 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
   const requestMap = {};
   state.requests.forEach(r => { requestMap[`${r.staff_id}_${r.date}`] = r; });
 
+  // 勤務確定（work_ebisu / work_shibuya）
+  // 希望休と同列のハード制約。生成の最初に配置し、以降のロジックは一切上書きしない。
+  const fixedWorkMap = {}; // `staffId_date` → 'ebisu' | 'shibuya'
+  state.requests.forEach(r => {
+    const store = WORK_REQUEST_STORE[r.request_type];
+    if (store) fixedWorkMap[`${r.staff_id}_${r.date}`] = store;
+  });
+
+  const isFixedWork = (staffId, dateStr) => !!fixedWorkMap[`${staffId}_${dateStr}`];
+  // 手動調整または勤務確定で埋まっている枠（後続の自動配置ロジックは触らない）
+  const isLocked = (staffId, dateStr) => manualSet.has(`${staffId}_${dateStr}`) || isFixedWork(staffId, dateStr);
+
+  // 勤務確定日の勤務パターン（社員・特別枠は○、パートは☆）
+  function fixedWorkPattern(staff, store) {
+    const isEmployeeStyle = staff.staff_type === 'employee' || staff.staff_type === 'special';
+    if (store === STORES.EBISU) return isEmployeeStyle ? PATTERNS.EMPLOYEE_EBISU : PATTERNS.PART_EBISU;
+    return isEmployeeStyle ? PATTERNS.EMPLOYEE_SHIBUYA : PATTERNS.PART_SHIBUYA;
+  }
+
   // 前月の出勤情報（月跨ぎ連勤チェック用）
   // prevWorkByStaff   : staffId → Set(前月の実働日 "YYYY-MM-DD")
   // prevDispenseByStaff: `staffId_date` → true（前月の調剤希望日）
@@ -1184,8 +1226,8 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
   }
 
   function canWork(staffId, dateStr) {
-    // 手動オーバーライドがあればスキップ
-    if (manualSet.has(`${staffId}_${dateStr}`)) return false;
+    // 手動オーバーライド・勤務確定は配置済みなのでスキップ
+    if (isLocked(staffId, dateStr)) return false;
 
     // 希望休/調剤/AM可/PM可チェック
     // AM可・PM可は「出勤拒否ではないが丸1日出勤はできない」扱いのため、シフトには入れない
@@ -1264,7 +1306,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
 
   // AM可・PM可スタッフ専用の出勤可否チェック（off/dispense のみブロック、am/pm は通過させる）
   function canWorkHalfDay(staffId, dateStr) {
-    if (manualSet.has(`${staffId}_${dateStr}`)) return false;
+    if (isLocked(staffId, dateStr)) return false;
     const req = requestMap[`${staffId}_${dateStr}`];
     // off・dispense のみブロック（am/pm はここではブロックしない）
     if (req && (req.request_type === 'off' || req.request_type === 'dispense')) return false;
@@ -1375,15 +1417,30 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       }
     }
 
+    // ---- 勤務確定の事前配置（ハード制約・最優先） ----
+    // 希望休と同列で最優先。ここで先に確定させ、勤務日数・連勤カウントにも算入する。
+    // 事務が確定で埋めた店舗は fixedOfficeStores に記録し、後段の事務配置で二重配置を防ぐ。
+    const fixedOfficeStores = new Set();
+    for (const staff of activeStaff) {
+      const store = fixedWorkMap[`${staff.id}_${dateStr}`];
+      if (!store) continue;
+      if (manualSet.has(`${staff.id}_${dateStr}`)) continue; // 手動調整が最終決定
+      addAssignment(staff.id, dateStr, '平日', fixedWorkPattern(staff, store));
+      if (staff.role === 'office') fixedOfficeStores.add(store);
+      if (store === STORES.EBISU && isEbisuClosed) {
+        warnings.push(`${dateStr}: 恵比寿は日曜定休だが ${staff.name} に勤務確定あり`);
+      }
+    }
+
     // 外部スタッフ：常に平日・空欄
     for (const ext of externalStaff) {
-      if (manualSet.has(`${ext.id}_${dateStr}`)) continue;
+      if (isLocked(ext.id, dateStr)) continue;
       addAssignment(ext.id, dateStr, '平日', '');
     }
 
     // ---- 社員配置 ----
     // 小野（恵比寿専属）
-    if (ono && !manualSet.has(`${ono.id}_${dateStr}`)) {
+    if (ono && !isLocked(ono.id, dateStr)) {
       const isRest = employeeRestDays[ono.id]?.has(dateStr);
       if (isRest || isEbisuClosed) {
         addAssignment(ono.id, dateStr, '所定休日', '');
@@ -1393,7 +1450,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     }
 
     // 信太（渋谷専属）- 一旦○渋谷で配置。◯開発判定は後で
-    if (shinoda && !manualSet.has(`${shinoda.id}_${dateStr}`)) {
+    if (shinoda && !isLocked(shinoda.id, dateStr)) {
       const isRest = employeeRestDays[shinoda.id]?.has(dateStr);
       if (isRest) {
         addAssignment(shinoda.id, dateStr, '所定休日', '');
@@ -1406,7 +1463,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     // 1. 店舗の薬剤師不足（小野休み or 信太休み）があるか？ -> 優先カバー
     // 2. ペース配分が早すぎないか？ -> ペース通りなら出勤、早すぎたら休んで後半に温存
     // 3. 上限：基本は17日でストップだが、不足があれば上限22日までカバーに入る（村上出動を阻止）
-    if (tokunaga && !manualSet.has(`${tokunaga.id}_${dateStr}`)) {
+    if (tokunaga && !isLocked(tokunaga.id, dateStr)) {
       let tokunagaPattern = PATTERNS.PART_SHIBUYA;
       let isShortage = false;
       const onoIsOff = ono && employeeRestDays[ono.id]?.has(dateStr);
@@ -1547,7 +1604,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
 
       if (passType === 'full') {
         for (const staff of sorted) {
-          if (manualSet.has(`${staff.id}_${dateStr}`)) continue;
+          if (isLocked(staff.id, dateStr)) continue;
           if (assignedOfficeToday.has(staff.id)) continue;
           if (!canWork(staff.id, dateStr)) continue;
           if (!checkPartConditions(staff, dateStr, isOverflow)) continue;
@@ -1557,7 +1614,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
         }
       } else if (passType === 'half') {
         for (const staff of sorted) {
-          if (manualSet.has(`${staff.id}_${dateStr}`)) continue;
+          if (isLocked(staff.id, dateStr)) continue;
           if (assignedOfficeToday.has(staff.id)) continue;
           const req = requestMap[`${staff.id}_${dateStr}`];
           if (!req || (req.request_type !== 'am' && req.request_type !== 'pm')) continue;
@@ -1585,7 +1642,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     //   3. 自店舗半日（AM/PM） ← 他店舗から引っ張るより、ホームの半日を優先
     //   4. 他店舗フルタイム応援（自店舗が完全に無理な場合のみ）
     //   5. 他店舗半日応援（最終手段）
-    if (!isEbisuClosed) {
+    if (!isEbisuClosed && !fixedOfficeStores.has(STORES.EBISU)) {
       if (!tryAssignOffice(ebisuTeam, dateStr, PATTERNS.PART_EBISU, false, 'full')) {
         if (!tryAssignOffice(ebisuTeam, dateStr, PATTERNS.PART_EBISU, true, 'full')) {
           if (!tryAssignOffice(ebisuTeam, dateStr, PATTERNS.PART_EBISU, true, 'half')) {
@@ -1599,7 +1656,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     }
 
     // 渋谷に事務1名配置（同じ優先順位ロジック）
-    {
+    if (!fixedOfficeStores.has(STORES.SHIBUYA)) {
       if (!tryAssignOffice(shibuyaTeam, dateStr, PATTERNS.PART_SHIBUYA, false, 'full')) {
         if (!tryAssignOffice(shibuyaTeam, dateStr, PATTERNS.PART_SHIBUYA, true, 'full')) {
           if (!tryAssignOffice(shibuyaTeam, dateStr, PATTERNS.PART_SHIBUYA, true, 'half')) {
@@ -1624,7 +1681,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     // 未配置の事務パートは休日
     // ただし 平日扱いの希望日（AM可・PM可・りんご等）で外れた日は「平日（勤務なし）」として記録（所定休日にしない）
     for (const staff of officeStaff) {
-      if (manualSet.has(`${staff.id}_${dateStr}`)) continue;
+      if (isLocked(staff.id, dateStr)) continue;
       if (assignedOfficeToday.has(staff.id)) continue;
       if (!result.find(a => a.staff_id === staff.id && a.date === dateStr)) {
         const officeReq = requestMap[`${staff.id}_${dateStr}`];
@@ -1657,21 +1714,24 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
 
       let murakamiPattern = '';
 
-      // 薬剤師不足チェックのみ（事務不足では出動しない）
-      if (!isEbisuClosed && ebisuPharm < 1) {
-        murakamiPattern = PATTERNS.EMPLOYEE_EBISU;
-      }
-      if (!murakamiPattern && shibuyaPharm < 1) {
-        murakamiPattern = PATTERNS.EMPLOYEE_SHIBUYA;
-      }
+      // 勤務確定日は既に配置済み（その出勤は todayAssignments の充足カウントに算入済み）
+      if (!isFixedWork(murakami.id, dateStr)) {
+        // 薬剤師不足チェックのみ（事務不足では出動しない）
+        if (!isEbisuClosed && ebisuPharm < 1) {
+          murakamiPattern = PATTERNS.EMPLOYEE_EBISU;
+        }
+        if (!murakamiPattern && shibuyaPharm < 1) {
+          murakamiPattern = PATTERNS.EMPLOYEE_SHIBUYA;
+        }
 
-      if (murakamiPattern) {
-        addAssignment(murakami.id, dateStr, '平日', murakamiPattern);
-      } else {
-        const req = requestMap[`${murakami.id}_${dateStr}`];
-        const isHolidayReq = req && !CSV_WEEKDAY_REQUEST_TYPES.includes(req.request_type);
-        const ringoPattern = (req && req.request_type === 'ringo') ? 'りんご' : '';
-        addAssignment(murakami.id, dateStr, isHolidayReq ? '所定休日' : '平日', ringoPattern);
+        if (murakamiPattern) {
+          addAssignment(murakami.id, dateStr, '平日', murakamiPattern);
+        } else {
+          const req = requestMap[`${murakami.id}_${dateStr}`];
+          const isHolidayReq = req && !CSV_WEEKDAY_REQUEST_TYPES.includes(req.request_type);
+          const ringoPattern = (req && req.request_type === 'ringo') ? 'りんご' : '';
+          addAssignment(murakami.id, dateStr, isHolidayReq ? '所定休日' : '平日', ringoPattern);
+        }
       }
 
       // 最終充足チェック → 警告
@@ -1698,6 +1758,13 @@ function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new 
   // 前月末からの連勤（月跨ぎ連勤対策）。当月先頭の連勤判定の初期値に使う。
   const prevStreak = yearMonth ? _getPrevCarryover(employee.id, yearMonth).streakWork : 0;
 
+  // 0. 勤務確定日（ハード制約）は公休にできない
+  const fixedWorkDates = new Set();
+  for (const { dateStr } of dates) {
+    const req = requestMap[`${employee.id}_${dateStr}`];
+    if (req && WORK_REQUEST_STORE[req.request_type]) fixedWorkDates.add(dateStr);
+  }
+
   // 1. 希望休（off）を先に公休としてカウント
   for (const { dateStr } of dates) {
     const req = requestMap[`${employee.id}_${dateStr}`];
@@ -1706,10 +1773,10 @@ function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new 
     }
   }
 
-  // 2. 恵比寿社員は日曜を自動的に公休
+  // 2. 恵比寿社員は日曜を自動的に公休（勤務確定がある日曜は除く）
   if (isEbisuEmployee) {
     for (const { dateStr, dow } of dates) {
-      if (dow === 0 && !restDays.has(dateStr)) {
+      if (dow === 0 && !restDays.has(dateStr) && !fixedWorkDates.has(dateStr)) {
         restDays.add(dateStr);
       }
     }
@@ -1721,7 +1788,7 @@ function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new 
 
   // 他の社員の公休日を避ける候補
   const allCandidates = dates
-    .filter(d => !restDays.has(d.dateStr) && d.dow !== 0)
+    .filter(d => !restDays.has(d.dateStr) && !fixedWorkDates.has(d.dateStr) && d.dow !== 0)
     .map(d => d.dateStr);
   const preferredCandidates = allCandidates.filter(d => !avoidDates.has(d));
   const candidates = [...(preferredCandidates.length >= remaining ? preferredCandidates : allCandidates)];
@@ -1775,8 +1842,8 @@ function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new 
           if (d.dow === 0 && isEbisuEmployee) continue;
           p = p ? p + 1 : 1;
           if (p >= 6 && placed < remaining) {
-            // 6連勤目があれば休みにする
-            if (!restDays.has(d.dateStr)) {
+            // 6連勤目があれば休みにする（勤務確定日は潰せないので次の日にずれる）
+            if (!restDays.has(d.dateStr) && !fixedWorkDates.has(d.dateStr)) {
               restDays.add(d.dateStr);
               placed++;
               p = null;

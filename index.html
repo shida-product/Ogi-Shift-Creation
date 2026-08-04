@@ -7,8 +7,8 @@
   <meta name="description" content="オオギ薬局 スタッフ希望休管理ツール">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/common.css?v=9">
-  <link rel="stylesheet" href="css/main.css?v=9">
+  <link rel="stylesheet" href="css/common.css?v=10">
+  <link rel="stylesheet" href="css/main.css?v=10">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script type="module">
     import { checkAuth, setupLogoutButton } from './js/auth.js';
@@ -55,6 +55,12 @@
         </div>
         <div class="legend__item">
           <span class="legend__dot legend__dot--other"></span>その他
+        </div>
+        <div class="legend__item">
+          <span class="legend__dot legend__dot--work-ebisu"></span>勤務（恵）
+        </div>
+        <div class="legend__item">
+          <span class="legend__dot legend__dot--work-shibuya"></span>勤務（渋）
         </div>
       </div>
 
@@ -130,6 +136,14 @@
           <label class="modal__radio-label">
             <input type="radio" name="request-type" value="other">
             <span class="radio-dot radio-dot--other"></span> その他
+          </label>
+          <label class="modal__radio-label">
+            <input type="radio" name="request-type" value="work_ebisu">
+            <span class="radio-dot radio-dot--work-ebisu"></span> 勤務（恵比寿）
+          </label>
+          <label class="modal__radio-label">
+            <input type="radio" name="request-type" value="work_shibuya">
+            <span class="radio-dot radio-dot--work-shibuya"></span> 勤務（渋谷）
           </label>
         </div>
       </div>

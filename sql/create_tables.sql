@@ -37,7 +37,7 @@ CREATE TABLE ogi_shift_requests (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   staff_id UUID NOT NULL REFERENCES ogi_staff(id) ON DELETE CASCADE,
   date DATE NOT NULL,
-  request_type TEXT NOT NULL CHECK (request_type IN ('off', 'am', 'pm', 'other', 'dispense', 'ringo')),
+  request_type TEXT NOT NULL CHECK (request_type IN ('off', 'am', 'pm', 'other', 'dispense', 'ringo', 'work_ebisu', 'work_shibuya')),
   note TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
