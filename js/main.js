@@ -724,13 +724,12 @@ function renderCalendar() {
         else if (prevReq && nextReq) extraCls = ' is-bar-middle';
         else if (prevReq && !nextReq) extraCls = ' is-bar-end';
 
-        // 勤務確定は店舗カラーで塗る（希望休＝スタッフ色と区別。凡例・日付詳細と同じ色）
+        // 勤務確定は生成画面と同じ表現：スタッフ色のまま、バー下端に店舗カラーの実線を引く
         let workCls = '';
-        if (r.request_type === 'work_ebisu') workCls = ' cal-evt--work-ebisu';
-        else if (r.request_type === 'work_shibuya') workCls = ' cal-evt--work-shibuya';
-        const styleAttr = workCls ? '' : ` style="background:${bg};color:${text};"`;
+        if (r.request_type === 'work_ebisu') workCls = ' cal-evt--fixed-ebisu';
+        else if (r.request_type === 'work_shibuya') workCls = ' cal-evt--fixed-shibuya';
 
-        eventsHtml += `<span class="cal-evt${workCls}${extraCls}"${styleAttr}>${escapeHtml(lastName + typeLabel)}</span>`;
+        eventsHtml += `<span class="cal-evt${workCls}${extraCls}" style="background:${bg};color:${text};">${escapeHtml(lastName + typeLabel)}</span>`;
       });
     }
 
