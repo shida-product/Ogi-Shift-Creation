@@ -126,8 +126,21 @@ button { cursor: pointer; border: none; background: none; }
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  overflow: visible;
+  overflow-x: auto;
+  overflow-y: hidden;
   white-space: nowrap;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+.app-header::-webkit-scrollbar {
+  height: 4px;
+}
+.app-header::-webkit-scrollbar-track {
+  background: transparent;
+}
+.app-header::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
 }
 .app-header__title {
   font-size: var(--font-size-lg);
@@ -326,9 +339,9 @@ button { cursor: pointer; border: none; background: none; }
   color: var(--color-primary-text);
 }
 .legend-fold__panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
+  position: fixed;
+  top: var(--header-height);
+  right: 16px;
   z-index: 120;
   display: flex;
   flex-direction: column;
@@ -676,6 +689,26 @@ select.input-field,
 /* ============================================================
  * 条件付き・その他希望リスト（全ページ共通）
  * ============================================================ */
+.other-list {
+  margin-top: 24px;
+}
+.other-list__title {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--color-text);
+  letter-spacing: -0.01em;
+}
+.other-list__count {
+  font-size: var(--font-size-xs);
+  background: var(--color-other-bg);
+  color: var(--color-other);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
 .other-list__items {
   display: flex;
   flex-wrap: wrap;

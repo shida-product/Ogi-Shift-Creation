@@ -324,11 +324,6 @@ function bindEvents() {
     }
   });
   setupGanttHover();
-
-  // 条件付き希望アコーディオンのトグル
-  document.getElementById('other-reqs-header').addEventListener('click', () => {
-    document.getElementById('other-reqs-accordion').classList.toggle('is-open');
-  });
 }
 
 // ============================================================
@@ -382,10 +377,28 @@ function setupGanttHover() {
     ganttTable.querySelectorAll('.cross-highlight').forEach(c => c.classList.remove('cross-highlight'));
   }
 
+  function clearOtherListHighlight() {
+    document.querySelectorAll('.other-list__item.is-gantt-hover').forEach(el => el.classList.remove('is-gantt-hover'));
+  }
+
+  function highlightMatchingOtherItems(staffId, dateStr) {
+    clearOtherListHighlight();
+    if (!staffId || !dateStr) return;
+    document.querySelectorAll('.other-list__item--clickable').forEach(item => {
+      if (item.dataset.staffId !== staffId) return;
+      const start = item.dataset.date;
+      const end = item.dataset.endDate || item.dataset.date;
+      if (dateStr >= start && dateStr <= end) item.classList.add('is-gantt-hover');
+    });
+  }
+
   ganttTable.addEventListener('mouseover', (e) => {
     clearCrossHighlight();
     const cell = e.target.closest('td.day-cell');
-    if (!cell) return;
+    if (!cell) {
+      clearOtherListHighlight();
+      return;
+    }
 
     // 行のハイライト
     const tr = cell.closest('tr');
@@ -400,10 +413,13 @@ function setupGanttHover() {
       const th = ganttTable.querySelector(`th[data-date="${dateStr}"]`);
       if (th) th.classList.add('cross-highlight');
     }
+
+    highlightMatchingOtherItems(cell.dataset.staff, cell.dataset.date);
   });
 
   ganttTable.addEventListener('mouseleave', () => {
     clearCrossHighlight();
+    clearOtherListHighlight();
   });
 }
 
@@ -437,15 +453,12 @@ function renderMonth() {
 }
 
 // ============================================================
-// 条件付き・その他希望リスト描画（アコーディオン）
+// 条件付き・その他希望リスト描画（希望休ページと同じカード）
 // ============================================================
 function renderOtherList() {
-  const accordion = document.getElementById('other-reqs-accordion');
-  const listEl = document.getElementById('other-reqs-list');
-  const countEl = document.getElementById('other-reqs-count');
-  if (!accordion || !listEl) return;
+  const container = document.getElementById('other-list');
+  if (!container) return;
 
-  // 対象フィルタ：休み（備考あり）+ 条件付き全種
   const filtered = state.requests
     .filter(r => r.request_type !== 'off' || (r.request_type === 'off' && r.note))
     .sort((a, b) => {
@@ -453,7 +466,6 @@ function renderOtherList() {
       return a.date.localeCompare(b.date);
     });
 
-  // 連続日付グループ化
   const grouped = [];
   filtered.forEach(r => {
     const last = grouped.length > 0 ? grouped[grouped.length - 1] : null;
@@ -465,61 +477,62 @@ function renderOtherList() {
   });
   grouped.sort((a, b) => a.start_date.localeCompare(b.start_date));
 
-  countEl.textContent = `${grouped.length}件`;
-  accordion.style.display = '';
-
   if (grouped.length === 0) {
-    listEl.innerHTML = '<p style="font-size:var(--font-size-sm);color:var(--color-text-muted);padding:8px 0;">条件付き希望はありません</p>';
+    container.innerHTML = `<div class="other-list__title">条件付き・その他の希望 <span class="other-list__count">0件</span></div>`;
     return;
   }
 
-  listEl.innerHTML = grouped.map(g => {
+  let html = `<div class="other-list__title">条件付き・その他の希望 <span class="other-list__count">${grouped.length}件</span></div>`;
+  html += '<div class="other-list__items">';
+  grouped.forEach(g => {
     const staff = state.staffList.find(s => s.id === g.staff_id);
-    const staffName = staff?.name?.split(/[\s　]+/)[0] || '?';
-
+    const lastName = (staff?.name || '不明').split(/[\s　]+/)[0];
     const startDt = new Date(g.start_date + 'T00:00:00');
     const endDt = new Date(g.end_date + 'T00:00:00');
-    let dateLabel = formatDateLabel(startDt);
+    let dateLabel = `${startDt.getMonth() + 1}/${startDt.getDate()}（${DAY_NAMES[startDt.getDay()]}）`;
     if (g.start_date !== g.end_date) {
-      dateLabel += `〜${formatDateLabel(endDt)}`;
+      dateLabel += `〜${endDt.getMonth() + 1}/${endDt.getDate()}（${DAY_NAMES[endDt.getDay()]}）`;
     }
 
-    const typeLabel = REQUEST_TYPE_LABEL[g.request_type]?.replace(/（.*?）/, '') || 'その他';
-    const itemCls = `other-list__item--${g.request_type || 'other'}`;
+    let typeLabel, itemCls;
+    if (g.request_type === 'am') { typeLabel = 'AM可'; itemCls = 'other-list__item--am'; }
+    else if (g.request_type === 'pm') { typeLabel = 'PM可'; itemCls = 'other-list__item--pm'; }
+    else if (g.request_type === 'dispense') { typeLabel = '調剤'; itemCls = 'other-list__item--dispense'; }
+    else if (g.request_type === 'ringo') { typeLabel = 'りんご'; itemCls = 'other-list__item--ringo'; }
+    else if (g.request_type === 'work_ebisu') { typeLabel = '勤務（恵比寿）'; itemCls = 'other-list__item--work-ebisu'; }
+    else if (g.request_type === 'work_shibuya') { typeLabel = '勤務（渋谷）'; itemCls = 'other-list__item--work-shibuya'; }
+    else if (g.request_type === 'off') { typeLabel = '休み'; itemCls = 'other-list__item--off'; }
+    else { typeLabel = 'その他'; itemCls = 'other-list__item--other'; }
 
-    const noteHtml = g.note ? `<span class="other-list__note">${g.note}</span>` : '';
-    return `<div class="other-list__item ${itemCls} other-list__item--clickable" data-staff="${g.staff_id}" data-start="${g.start_date}" data-end="${g.end_date}" data-type="${g.request_type}">
+    const noteHtml = g.note ? `<span class="other-list__note">${escapeHtml(g.note)}</span>` : '';
+    html += `<div class="other-list__item other-list__item--clickable ${itemCls}" data-staff-id="${g.staff_id}" data-date="${g.start_date}" data-end-date="${g.end_date}" data-type="${g.request_type}">
       <span class="other-list__date">${dateLabel}</span>
-      <span class="other-list__staff">${staffName} ${typeLabel}</span>
+      <span class="other-list__staff">${escapeHtml(lastName)} ${typeLabel}</span>
       ${noteHtml}
     </div>`;
-  }).join('');
+  });
+  html += '</div>';
+  container.innerHTML = html;
 
-  // 各アイテムのホバーでガントをハイライト
-  listEl.querySelectorAll('.other-list__item').forEach(item => {
+  container.querySelectorAll('.other-list__item--clickable').forEach(item => {
     item.addEventListener('mouseenter', () => {
-      const staffId = item.dataset.staff;
+      const startDate = new Date(item.dataset.date + 'T00:00:00');
+      const endDate = new Date((item.dataset.endDate || item.dataset.date) + 'T00:00:00');
       const reqType = item.dataset.type;
-      const startDate = new Date(item.dataset.start + 'T00:00:00');
-      const endDate = new Date(item.dataset.end + 'T00:00:00');
-
-      let d = new Date(startDate);
+      const d = new Date(startDate);
       while (d <= endDate) {
-        const cell = document.querySelector(`.day-cell[data-staff="${staffId}"][data-date="${formatDate(d)}"]`);
+        const cell = document.querySelector(`.day-cell[data-staff="${item.dataset.staffId}"][data-date="${formatDate(d)}"]`);
         if (cell) cell.classList.add(`is-hover-${reqType}`);
         d.setDate(d.getDate() + 1);
       }
     });
-
     item.addEventListener('mouseleave', () => {
-      const staffId = item.dataset.staff;
+      const startDate = new Date(item.dataset.date + 'T00:00:00');
+      const endDate = new Date((item.dataset.endDate || item.dataset.date) + 'T00:00:00');
       const reqType = item.dataset.type;
-      const startDate = new Date(item.dataset.start + 'T00:00:00');
-      const endDate = new Date(item.dataset.end + 'T00:00:00');
-
-      let d = new Date(startDate);
+      const d = new Date(startDate);
       while (d <= endDate) {
-        const cell = document.querySelector(`.day-cell[data-staff="${staffId}"][data-date="${formatDate(d)}"]`);
+        const cell = document.querySelector(`.day-cell[data-staff="${item.dataset.staffId}"][data-date="${formatDate(d)}"]`);
         if (cell) cell.classList.remove(`is-hover-${reqType}`);
         d.setDate(d.getDate() + 1);
       }
