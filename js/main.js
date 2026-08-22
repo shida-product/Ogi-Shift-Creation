@@ -8,6 +8,13 @@
  */
 
 import { supabase } from './supabase-config.js';
+import {
+  getDefaultViewMonth,
+  getCalendarMonthClamped,
+  getMonthWindow,
+  isMonthInWindow,
+  compareYearMonth,
+} from './month-window.js';
 
 // ============================================================
 // スタッフカラーパレット（個人別色分け・カレンダー表示用）
@@ -110,21 +117,13 @@ function getHolidays(year) {
 // ============================================================
 // 状態管理
 // ============================================================
-let initYear = new Date().getFullYear();
-let initMonth = new Date().getMonth();
-if (initYear < 2026 || (initYear === 2026 && initMonth < 3)) {
-  initYear = 2026;
-  initMonth = 3;
-} else if (initYear > 2026 || (initYear === 2026 && initMonth > 10)) {
-  initYear = 2026;
-  initMonth = 10;
-}
+const _initView = getDefaultViewMonth();
 
 const state = {
   staffList: [],
   requests: [],
-  currentYear: initYear,
-  currentMonth: initMonth,
+  currentYear: _initView.year,
+  currentMonth: _initView.month,
   selectedStaffId: localStorage.getItem('selectedStaffId') || '',
   holidays: {},
   editingDates: [],
@@ -158,13 +157,9 @@ function bindEvents() {
   document.getElementById('prev-month').addEventListener('click', () => changeMonth(-1));
   document.getElementById('next-month').addEventListener('click', () => changeMonth(1));
   document.getElementById('today-month-btn').addEventListener('click', () => {
-    const now = new Date();
-    let ty = now.getFullYear();
-    let tm = now.getMonth();
-    if (ty < 2026 || (ty === 2026 && tm < 3)) { ty = 2026; tm = 3; }
-    else if (ty > 2026 || (ty === 2026 && tm > 10)) { ty = 2026; tm = 10; }
-    state.currentYear = ty;
-    state.currentMonth = tm;
+    const cal = getCalendarMonthClamped();
+    state.currentYear = cal.year;
+    state.currentMonth = cal.month;
     updateHolidays();
     renderMonth();
     loadRequests();
@@ -228,11 +223,12 @@ function closeMonthPicker() {
 }
 
 function renderMonthPickerGrid() {
+  const { min, max } = getMonthWindow();
   document.getElementById('picker-year-label').textContent = `${pickerYear}年`;
   const grid = document.getElementById('picker-month-grid');
   grid.innerHTML = MONTH_LABELS.map((label, i) => {
     const isCurrent = (pickerYear === state.currentYear && i === state.currentMonth);
-    const isDisabled = pickerYear < 2026 || (pickerYear === 2026 && i < 3) || pickerYear > 2026 || (pickerYear === 2026 && i > 10);
+    const isDisabled = !isMonthInWindow(pickerYear, i);
     return `<button class="month-picker__month-btn${isCurrent ? ' is-current' : ''}" data-month="${i}" ${isDisabled ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>${label}</button>`;
   }).join('');
 
@@ -249,8 +245,8 @@ function renderMonthPickerGrid() {
 
   const pPrev = document.getElementById('picker-prev-year');
   const pNext = document.getElementById('picker-next-year');
-  if(pPrev) { pPrev.disabled = pickerYear <= 2026; pPrev.style.opacity = pPrev.disabled ? '0.3' : '1'; }
-  if(pNext) { pNext.disabled = pickerYear >= 2026; pNext.style.opacity = pNext.disabled ? '0.3' : '1'; }
+  if (pPrev) { pPrev.disabled = pickerYear <= min.year; pPrev.style.opacity = pPrev.disabled ? '0.3' : '1'; }
+  if (pNext) { pNext.disabled = pickerYear >= max.year; pNext.style.opacity = pNext.disabled ? '0.3' : '1'; }
 }
 
 // ============================================================
@@ -346,12 +342,30 @@ function setupGanttHover() {
     ganttTable.querySelectorAll('.cross-highlight').forEach(c => c.classList.remove('cross-highlight'));
   }
 
+  function clearOtherListHighlight() {
+    document.querySelectorAll('.other-list__item.is-gantt-hover').forEach(el => el.classList.remove('is-gantt-hover'));
+  }
+
+  function highlightMatchingOtherItems(staffId, dateStr) {
+    clearOtherListHighlight();
+    if (!staffId || !dateStr) return;
+    document.querySelectorAll('.other-list__item--clickable').forEach(item => {
+      if (item.dataset.staffId !== staffId) return;
+      const start = item.dataset.date;
+      const end = item.dataset.endDate || item.dataset.date;
+      if (dateStr >= start && dateStr <= end) item.classList.add('is-gantt-hover');
+    });
+  }
+
   tbody.addEventListener('mouseover', (e) => {
     if (ganttTable.classList.contains('is-dragging')) return;
     clearCrossHighlight();
     
     const cell = e.target.closest('td');
-    if (!cell) return;
+    if (!cell) {
+      clearOtherListHighlight();
+      return;
+    }
 
     // 行のハイライト
     const tr = cell.closest('tr');
@@ -366,10 +380,14 @@ function setupGanttHover() {
       const th = ganttTable.querySelector(`th[data-date="${dateStr}"]`);
       if (th) th.classList.add('cross-highlight');
     }
+
+    const dayCell = e.target.closest('.day-cell');
+    highlightMatchingOtherItems(dayCell?.dataset.staff, dayCell?.dataset.date);
   });
 
   tbody.addEventListener('mouseleave', () => {
     clearCrossHighlight();
+    clearOtherListHighlight();
   });
 }
 
@@ -417,9 +435,8 @@ function changeMonth(delta) {
   let nextM = state.currentMonth + delta;
   if (nextM > 11) { nextM = 0; nextY++; }
   else if (nextM < 0) { nextM = 11; nextY--; }
-  
-  if (nextY < 2026 || (nextY === 2026 && nextM < 3)) return;
-  if (nextY > 2026 || (nextY === 2026 && nextM > 10)) return;
+
+  if (!isMonthInWindow(nextY, nextM)) return;
 
   state.currentMonth = nextM;
   state.currentYear = nextY;
@@ -431,22 +448,17 @@ function changeMonth(delta) {
 function renderMonth() {
   document.getElementById('month-label').textContent = `${state.currentYear}年 ${state.currentMonth + 1}月`;
 
-  // 「今月」ボタン：当月以外を表示中のときだけ表示する
-  const now = new Date();
-  let targetYear = now.getFullYear();
-  let targetMonth = now.getMonth();
+  // 「今月」ボタン：カレンダー当月以外を表示中のときだけ表示する
+  const cal = getCalendarMonthClamped();
+  const isCalMonth = (state.currentYear === cal.year && state.currentMonth === cal.month);
+  document.getElementById('today-month-btn').style.display = isCalMonth ? 'none' : 'inline-block';
 
-  if (targetYear < 2026 || (targetYear === 2026 && targetMonth < 3) || targetYear > 2026 || (targetYear === 2026 && targetMonth > 10)) {
-    document.getElementById('today-month-btn').style.display = 'none';
-  } else {
-    const isCurrentMonth = (state.currentYear === targetYear && state.currentMonth === targetMonth);
-    document.getElementById('today-month-btn').style.display = isCurrentMonth ? 'none' : 'inline-block';
-  }
-
+  const { min, max } = getMonthWindow();
+  const cur = { year: state.currentYear, month: state.currentMonth };
   const prevBtn = document.getElementById('prev-month');
   const nextBtn = document.getElementById('next-month');
-  if(prevBtn) prevBtn.disabled = (state.currentYear === 2026 && state.currentMonth <= 3) || state.currentYear < 2026;
-  if(nextBtn) nextBtn.disabled = (state.currentYear === 2026 && state.currentMonth >= 10) || state.currentYear > 2026;
+  if (prevBtn) prevBtn.disabled = compareYearMonth(cur, min) <= 0;
+  if (nextBtn) nextBtn.disabled = compareYearMonth(cur, max) >= 0;
 }
 
 
@@ -945,7 +957,7 @@ function renderOtherList() {
 
     const noteHtml = g.note ? `<span class="other-list__note">${escapeHtml(g.note)}</span>` : '';
 
-    html += `<div class="other-list__item other-list__item--clickable ${itemCls}" data-staff-id="${g.staff_id}" data-date="${g.start_date}" data-type="${g.request_type}">
+    html += `<div class="other-list__item other-list__item--clickable ${itemCls}" data-staff-id="${g.staff_id}" data-date="${g.start_date}" data-end-date="${g.end_date}" data-type="${g.request_type}">
       <span class="other-list__date">${dateLabel}</span>
       <span class="other-list__staff">${escapeHtml(lastName)} ${typeLabel}</span>
       ${noteHtml}

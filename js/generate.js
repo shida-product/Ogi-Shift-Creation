@@ -7,6 +7,13 @@
  */
 
 import { supabase } from './supabase-config.js';
+import {
+  getDefaultViewMonth,
+  getCalendarMonthClamped,
+  getMonthWindow,
+  isMonthInWindow,
+  compareYearMonth,
+} from './month-window.js';
 
 // ============================================================
 // 定数
@@ -160,15 +167,7 @@ function getHolidays(year) {
 // ============================================================
 // 状態管理
 // ============================================================
-let initYear = new Date().getFullYear();
-let initMonth = new Date().getMonth();
-if (initYear < 2026 || (initYear === 2026 && initMonth < 3)) {
-  initYear = 2026;
-  initMonth = 3;
-} else if (initYear > 2026 || (initYear === 2026 && initMonth > 10)) {
-  initYear = 2026;
-  initMonth = 10;
-}
+const _initView = getDefaultViewMonth();
 
 const state = {
   staffList: [],
@@ -177,8 +176,8 @@ const state = {
   prevAssignments: [], // 前月の shift_assignments（月跨ぎ連勤チェック用）
   prevRequests: [],    // 前月の shift_requests（月跨ぎ連勤チェック用：調剤など）
   monthlySettings: {},
-  currentYear: initYear,
-  currentMonth: initMonth,
+  currentYear: _initView.year,
+  currentMonth: _initView.month,
   holidays: {},
   warnings: [],
   hasGenerated: false,
@@ -298,13 +297,9 @@ function bindEvents() {
   document.getElementById('prev-month').addEventListener('click', () => changeMonth(-1));
   document.getElementById('next-month').addEventListener('click', () => changeMonth(1));
   document.getElementById('today-month-btn').addEventListener('click', () => {
-    const now = new Date();
-    let ty = now.getFullYear();
-    let tm = now.getMonth();
-    if (ty < 2026 || (ty === 2026 && tm < 3)) { ty = 2026; tm = 3; }
-    else if (ty > 2026 || (ty === 2026 && tm > 10)) { ty = 2026; tm = 10; }
-    state.currentYear = ty;
-    state.currentMonth = tm;
+    const cal = getCalendarMonthClamped();
+    state.currentYear = cal.year;
+    state.currentMonth = cal.month;
     state.holidays = { ...getHolidays(state.currentYear), ...getHolidays(state.currentYear + 1) };
     renderMonth();
     loadExistingAssignments();
@@ -351,11 +346,12 @@ function closeMonthPicker() {
   document.getElementById('month-picker-overlay').style.display = 'none';
 }
 function renderMonthPickerGrid() {
+  const { min, max } = getMonthWindow();
   document.getElementById('picker-year-label').textContent = `${pickerYear}年`;
   const grid = document.getElementById('picker-month-grid');
   grid.innerHTML = MONTH_LABELS.map((label, i) => {
     const isCurrent = (pickerYear === state.currentYear && i === state.currentMonth);
-    const isDisabled = pickerYear < 2026 || (pickerYear === 2026 && i < 3) || pickerYear > 2026 || (pickerYear === 2026 && i > 10);
+    const isDisabled = !isMonthInWindow(pickerYear, i);
     return `<button class="month-picker__month-btn${isCurrent ? ' is-current' : ''}" data-month="${i}" ${isDisabled ? 'disabled style="opacity:0.3;cursor:not-allowed;"' : ''}>${label}</button>`;
   }).join('');
   grid.querySelectorAll('.month-picker__month-btn:not([disabled])').forEach(btn => {
@@ -371,8 +367,8 @@ function renderMonthPickerGrid() {
 
   const pPrev = document.getElementById('picker-prev-year');
   const pNext = document.getElementById('picker-next-year');
-  if(pPrev) { pPrev.disabled = pickerYear <= 2026; pPrev.style.opacity = pPrev.disabled ? '0.3' : '1'; }
-  if(pNext) { pNext.disabled = pickerYear >= 2026; pNext.style.opacity = pNext.disabled ? '0.3' : '1'; }
+  if (pPrev) { pPrev.disabled = pickerYear <= min.year; pPrev.style.opacity = pPrev.disabled ? '0.3' : '1'; }
+  if (pNext) { pNext.disabled = pickerYear >= max.year; pNext.style.opacity = pNext.disabled ? '0.3' : '1'; }
 }
 
 // ============================================================
@@ -416,9 +412,8 @@ function changeMonth(delta) {
   let nextM = state.currentMonth + delta;
   if (nextM > 11) { nextM = 0; nextY++; }
   else if (nextM < 0) { nextM = 11; nextY--; }
-  
-  if (nextY < 2026 || (nextY === 2026 && nextM < 3)) return;
-  if (nextY > 2026 || (nextY === 2026 && nextM > 10)) return;
+
+  if (!isMonthInWindow(nextY, nextM)) return;
 
   state.currentMonth = nextM;
   state.currentYear = nextY;
@@ -429,21 +424,16 @@ function changeMonth(delta) {
 
 function renderMonth() {
   document.getElementById('month-label').textContent = `${state.currentYear}年 ${state.currentMonth + 1}月`;
-  const now = new Date();
-  let targetYear = now.getFullYear();
-  let targetMonth = now.getMonth();
+  const cal = getCalendarMonthClamped();
+  const isCalMonth = (state.currentYear === cal.year && state.currentMonth === cal.month);
+  document.getElementById('today-month-btn').style.display = isCalMonth ? 'none' : 'inline-block';
 
-  if (targetYear < 2026 || (targetYear === 2026 && targetMonth < 3) || targetYear > 2026 || (targetYear === 2026 && targetMonth > 10)) {
-    document.getElementById('today-month-btn').style.display = 'none';
-  } else {
-    const isCurrentMonth = (state.currentYear === targetYear && state.currentMonth === targetMonth);
-    document.getElementById('today-month-btn').style.display = isCurrentMonth ? 'none' : 'inline-block';
-  }
-
+  const { min, max } = getMonthWindow();
+  const cur = { year: state.currentYear, month: state.currentMonth };
   const prevBtn = document.getElementById('prev-month');
   const nextBtn = document.getElementById('next-month');
-  if(prevBtn) prevBtn.disabled = (state.currentYear === 2026 && state.currentMonth <= 3) || state.currentYear < 2026;
-  if(nextBtn) nextBtn.disabled = (state.currentYear === 2026 && state.currentMonth >= 10) || state.currentYear > 2026;
+  if (prevBtn) prevBtn.disabled = compareYearMonth(cur, min) <= 0;
+  if (nextBtn) nextBtn.disabled = compareYearMonth(cur, max) >= 0;
 }
 
 // ============================================================
@@ -887,15 +877,15 @@ function runAllChecks(assignments, yearMonth) {
     { id: 'G1-shibuya', tag: '絶対', status: shibuyaShort === 0 ? 'pass' : 'fail', text: '渋谷（薬1+事1）', value: shibuyaShort === 0 ? '充足' : `${shibuyaShort}日不足`, scoreDelta: shibuyaShort > 0 ? -100 * shibuyaShort : 0 },
   );
 
-  // G2. 希望休反映
+  // G2. 希望休・調剤反映（出勤禁止日）
   let violations = 0;
-  const offRequests = state.requests.filter(r => r.request_type === 'off');
-  for (const req of offRequests) {
+  const blockedRequests = state.requests.filter(r => r.request_type === 'off' || r.request_type === 'dispense');
+  for (const req of blockedRequests) {
     const assign = assignments.find(a => a.staff_id === req.staff_id && a.date === req.date);
     if (assign && assign.work_pattern && assign.work_pattern !== '') violations++;
   }
   globalItems.push(
-    { id: 'G2', tag: '絶対', status: violations === 0 ? 'pass' : 'fail', text: '希望休が全て反映されている', value: violations === 0 ? '○' : `${violations}件違反`, scoreDelta: 0 },
+    { id: 'G2', tag: '絶対', status: violations === 0 ? 'pass' : 'fail', text: '希望休・調剤が全て反映されている', value: violations === 0 ? '○' : `${violations}件違反`, scoreDelta: 0 },
   );
 
   // G3. 勤務確定反映（希望休と同列のハード制約。店舗まで一致しているか）
@@ -949,7 +939,6 @@ function runAllChecks(assignments, yearMonth) {
   // --- 信太（渋谷固定） ---
   if (shinoda) {
     const restCount = rest(shinoda.id).length;
-    const devCount = _countPattern(assignments, shinoda.id, PATTERNS.DEV);
     const allShibuya = work(shinoda.id).every(a =>
       a.work_pattern === PATTERNS.EMPLOYEE_SHIBUYA || a.work_pattern === PATTERNS.DEV
     );
@@ -967,7 +956,6 @@ function runAllChecks(assignments, yearMonth) {
     const items = [
       { id: 'shinoda-store', tag: '絶対', status: allShibuya ? 'pass' : 'fail', text: '渋谷固定', value: allShibuya ? '○' : '他店あり', scoreDelta: 0 },
       { id: 'shinoda-rest', tag: '絶対', status: restCount === daysOff ? 'pass' : 'warn', text: `公休数 (${daysOff}日)`, value: `${restCount}日`, scoreDelta: 0 },
-      { id: 'shinoda-dev', tag: '絶対', status: devCount <= 2 ? 'pass' : 'fail', text: '開発業務の割り当て回数（0~2回まで）', value: `${devCount}回`, scoreDelta: 0 },
       { id: 'shinoda-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: _consecValueText(consecD), scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
       { id: 'shinoda-pairs', tag: '低', status: pairs >= 2 ? 'pass' : 'warn', text: '2連休取得回数（シフトに余裕がある場合）', value: `${pairs}回`, scoreDelta: pairs > 0 ? pairs * 5 : 0 },
       { id: 'shinoda-adjpair', tag: '高', status: adjacentPairs === 0 ? 'pass' : 'warn', text: '連休同士の過度な近接回避', value: adjacentPairs === 0 ? '○' : `${adjacentPairs}箇所`, scoreDelta: adjacentPairs > 0 ? -adjacentPairs * 20 : 0 },
@@ -1006,12 +994,12 @@ function runAllChecks(assignments, yearMonth) {
     };
   }
 
-  // --- 村上（穴埋め） ---
+  // --- 村上（自動配置なし・手動のみ） ---
   if (murakami) {
     const mWork = work(murakami.id).length;
     staffChecks[murakami.id] = {
       name: murakami.name, section: '薬剤師', items: [
-        { id: 'mura-days', tag: '中', status: mWork <= 3 ? 'pass' : 'warn', text: '出勤日数（極力少なく）', value: `${mWork}日`, scoreDelta: mWork > 0 ? -mWork * 10 : 0 },
+        { id: 'mura-days', tag: '中', status: mWork === 0 ? 'pass' : 'warn', text: '出勤日数（自動除外・手動のみ）', value: `${mWork}日`, scoreDelta: mWork > 0 ? -mWork * 10 : 0 },
       ]
     };
   }
@@ -1393,9 +1381,6 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
     return true;
   }
 
-  // ◯開発カウント（月1-2回まで）
-  let devCount = 0;
-
   // ---- 渋谷の事務枠だけ連続ブロック維持（数日ブロックで交代させる） ----
   // 渋谷は本庄（穴埋め＝target無し）が混じるため、放置すると諫早＝前半集中／本庄＝後半集中に偏る。
   // 前日に渋谷枠を担当した人へブロック上限までボーナスを与え、数日ブロックで諫早⇄本庄を交代させる。
@@ -1449,7 +1434,8 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       }
     }
 
-    // 信太（渋谷専属）- 一旦○渋谷で配置。◯開発判定は後で
+    // 信太（渋谷専属）- ○渋谷で配置
+    // ※◯開発の自動切替は運用都合で停止中。手動編集での◯開発は可。
     if (shinoda && !isLocked(shinoda.id, dateStr)) {
       const isRest = employeeRestDays[shinoda.id]?.has(dateStr);
       if (isRest) {
@@ -1522,19 +1508,9 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       }
     }
 
-    // ---- ◯開発 判定 ----
-    // 徳永が渋谷に入っていて、信太が○渋谷 → 信太を◯開発に変更
-    // 月に1〜2回まで（0回でもOK）
-    if (shinoda && tokunaga && devCount < 2) {
-      const shinodaAssign = result.find(a => a.staff_id === shinoda.id && a.date === dateStr);
-      const tokunagaAssign = result.find(a => a.staff_id === tokunaga.id && a.date === dateStr);
-      if (shinodaAssign && !shinodaAssign.is_manual_override &&
-        shinodaAssign.work_pattern === PATTERNS.EMPLOYEE_SHIBUYA &&
-        tokunagaAssign && tokunagaAssign.work_pattern === PATTERNS.PART_SHIBUYA) {
-        shinodaAssign.work_pattern = PATTERNS.DEV;
-        devCount++;
-      }
-    }
+    // ---- ◯開発 判定（自動OFF） ----
+    // 運用: 初期生成では開発を入れない。手動で◯開発を入れた場合のみ残る。
+    // （旧仕様: 徳永が渋谷の日に信太を◯開発へ切替・月最大2回）
 
     // ---- 事務パート配置 ----
     // 恵比寿チーム: 木庭・中村（基本この2人で回す）
@@ -1690,15 +1666,19 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       }
     }
 
-    // ---- 充足チェック＆村上穴埋め ----
-    // 村上は極力出勤させない。薬剤師不足時（希望休重複等）のみ出動。
-    // 事務不足では出動しない。
-    if (murakami && !manualSet.has(`${murakami.id}_${dateStr}`)) {
-      const todayAssignments = result.filter(a => a.date === dateStr && a.work_pattern !== '');
+    // ---- 村上（自動配置なし）＋充足警告 ----
+    // 村上は自動で店舗に入れない。勤務確定・手動編集・りんご希望のみ反映。
+    if (murakami && !manualSet.has(`${murakami.id}_${dateStr}`) && !isFixedWork(murakami.id, dateStr)) {
+      const req = requestMap[`${murakami.id}_${dateStr}`];
+      const isHolidayReq = req && !CSV_WEEKDAY_REQUEST_TYPES.includes(req.request_type);
+      const ringoPattern = (req && req.request_type === 'ringo') ? 'りんご' : '';
+      addAssignment(murakami.id, dateStr, isHolidayReq ? '所定休日' : '平日', ringoPattern);
+    }
 
+    {
+      const todayAssignments = result.filter(a => a.date === dateStr && a.work_pattern !== '');
       let ebisuPharm = 0, ebisuOffice = 0;
       let shibuyaPharm = 0, shibuyaOffice = 0;
-
       todayAssignments.forEach(a => {
         if (a.work_pattern === PATTERNS.EMPLOYEE_EBISU || a.work_pattern === PATTERNS.PART_EBISU) {
           const staff = state.staffList.find(s => s.id === a.staff_id);
@@ -1711,37 +1691,11 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
           else shibuyaOffice++;
         }
       });
-
-      let murakamiPattern = '';
-
-      // 勤務確定日は既に配置済み（その出勤は todayAssignments の充足カウントに算入済み）
-      if (!isFixedWork(murakami.id, dateStr)) {
-        // 薬剤師不足チェックのみ（事務不足では出動しない）
-        if (!isEbisuClosed && ebisuPharm < 1) {
-          murakamiPattern = PATTERNS.EMPLOYEE_EBISU;
-        }
-        if (!murakamiPattern && shibuyaPharm < 1) {
-          murakamiPattern = PATTERNS.EMPLOYEE_SHIBUYA;
-        }
-
-        if (murakamiPattern) {
-          addAssignment(murakami.id, dateStr, '平日', murakamiPattern);
-        } else {
-          const req = requestMap[`${murakami.id}_${dateStr}`];
-          const isHolidayReq = req && !CSV_WEEKDAY_REQUEST_TYPES.includes(req.request_type);
-          const ringoPattern = (req && req.request_type === 'ringo') ? 'りんご' : '';
-          addAssignment(murakami.id, dateStr, isHolidayReq ? '所定休日' : '平日', ringoPattern);
-        }
-      }
-
-      // 最終充足チェック → 警告
       if (!isEbisuClosed) {
-        const finalEbisuPharm = ebisuPharm + (murakamiPattern === PATTERNS.EMPLOYEE_EBISU ? 1 : 0);
-        if (finalEbisuPharm < 1) warnings.push(`${dateStr}: 恵比寿 薬剤師不足`);
+        if (ebisuPharm < 1) warnings.push(`${dateStr}: 恵比寿 薬剤師不足`);
         if (ebisuOffice < 1) warnings.push(`${dateStr}: 恵比寿 事務不足`);
       }
-      const finalShibuyaPharm = shibuyaPharm + (murakamiPattern === PATTERNS.EMPLOYEE_SHIBUYA ? 1 : 0);
-      if (finalShibuyaPharm < 1) warnings.push(`${dateStr}: 渋谷 薬剤師不足`);
+      if (shibuyaPharm < 1) warnings.push(`${dateStr}: 渋谷 薬剤師不足`);
       if (shibuyaOffice < 1) warnings.push(`${dateStr}: 渋谷 事務不足`);
     }
   }
