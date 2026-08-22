@@ -206,6 +206,57 @@
   background: var(--color-surface-2);
 }
 
+/* 前月末（連勤キャリー）列 */
+.gantt-prev-carry {
+  min-width: 52px;
+  max-width: 64px;
+  padding: 2px 4px !important;
+  text-align: center;
+  vertical-align: middle;
+  background: #f4f6f8;
+  border-right: 2px solid var(--color-border) !important;
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: var(--color-text-muted);
+}
+.gantt-table thead .gantt-prev-carry {
+  background: #e8ecf0;
+  line-height: 1.15;
+  white-space: nowrap;
+}
+.gantt-table tfoot .gantt-prev-carry {
+  background: #e8ecf0;
+}
+.gantt-prev-carry .prev-carry-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.gantt-prev-carry .pattern-marker {
+  width: 28px;
+  height: 18px;
+  font-size: 0.55rem;
+}
+.gantt-prev-carry .prev-carry-streak {
+  color: var(--color-text-secondary);
+  letter-spacing: 0.02em;
+}
+.gantt-prev-carry.is-at-max {
+  background: #fee2e2;
+}
+.gantt-prev-carry.is-at-max .prev-carry-streak {
+  color: #dc2626;
+}
+.gantt-prev-carry .prev-carry-off,
+.gantt-prev-carry .prev-carry-empty {
+  font-size: 0.7rem;
+  color: var(--color-text-muted);
+}
+.gantt-prev-carry.is-off {
+  background: #f4f6f8;
+}
+
 /* セル */
 .gantt-table .day-cell {
   min-width: 40px;
@@ -223,8 +274,8 @@
 }
 
 /* クロスハイライト（縦横軸）※集計欄・スタッフ名は除外 */
-.gantt-table td.cross-highlight:not(.gantt-summary-col):not(.staff-name),
-.gantt-table th.cross-highlight:not(.gantt-summary-col):not(.staff-name) {
+.gantt-table td.cross-highlight:not(.gantt-summary-col):not(.gantt-prev-carry):not(.staff-name),
+.gantt-table th.cross-highlight:not(.gantt-summary-col):not(.gantt-prev-carry):not(.staff-name) {
   background-color: #F1F5F9 !important;
 }
 

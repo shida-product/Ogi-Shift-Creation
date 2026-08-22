@@ -2022,18 +2022,72 @@ async function saveAssignments(yearMonth, assignments) {
 // ============================================================
 // ガントチャート描画
 // ============================================================
+function buildPrevCarryCellHtml(staff, yearMonth) {
+  const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+  const carry = _getPrevCarryover(staff.id, yearMonth);
+  const prevLast = carry.prevLastDate;
+  const [py, pm, pd] = prevLast.split('-').map(Number);
+  const prevDt = new Date(py, pm - 1, pd);
+  const dowLabel = dayNames[prevDt.getDay()];
+  const maxConsec = staff.work_conditions?.max_consecutive_days || 5;
+  const prevAssign = state.prevAssignments.find(a => a.staff_id === staff.id && a.date === prevLast);
+  const prevYM = getPrevYearMonth(yearMonth);
+  const hasPrevMonth = state.prevAssignments.some(a =>
+    a.year_month === prevYM || (typeof a.date === 'string' && a.date.startsWith(prevYM + '-'))
+  );
+  const pattern = prevAssign?.work_pattern || '';
+  const worked = !!(pattern && pattern !== '');
+
+  if (staff.staff_type === 'external') {
+    return { html: `<td class="gantt-prev-carry"><span class="prev-carry-empty">—</span></td>` };
+  }
+
+  if (!hasPrevMonth) {
+    return {
+      html: `<td class="gantt-prev-carry" title="前月データなし"><span class="prev-carry-empty">—</span></td>`,
+    };
+  }
+
+  const dateLabel = `${pm}/${pd}（${dowLabel}）`;
+  if (!worked) {
+    return {
+      html: `<td class="gantt-prev-carry is-off" title="${dateLabel}：休み（連勤キャリーなし）"><span class="prev-carry-off">休</span></td>`,
+    };
+  }
+
+  const streak = carry.streakWork;
+  const atMax = streak >= maxConsec;
+  const short = PATTERN_LABEL[pattern] || pattern.replace(/^[○◯☆]/, '').slice(0, 2);
+  const markerCls = PATTERN_CSS[pattern] || 'pattern-marker--special';
+  const title = `${dateLabel}：${pattern}・${streak}連勤目（上限${maxConsec}${atMax ? '・翌日起勤不可' : ''}）`;
+  return {
+    html: `<td class="gantt-prev-carry${atMax ? ' is-at-max' : ''}" title="${escapeHtml(title)}">
+      <div class="prev-carry-inner">
+        <div class="pattern-marker ${markerCls}" data-role="${staff.role || ''}">${escapeHtml(short)}</div>
+        <span class="prev-carry-streak">${streak}連</span>
+      </div>
+    </td>`,
+  };
+}
+
 function renderGantt() {
   const daysInMonth = new Date(state.currentYear, state.currentMonth + 1, 0).getDate();
   const today = new Date();
   const todayStr = formatDate(today);
   const dayNames = ['日', '月', '火', '水', '木', '金', '土'];
+  const yearMonth = getCurrentYearMonth();
+  const prevYM = getPrevYearMonth(yearMonth);
+  const [prevY, prevM] = prevYM.split('-').map(Number);
+  const prevLastDayNum = new Date(prevY, prevM, 0).getDate();
+  const prevLastDt = new Date(prevY, prevM - 1, prevLastDayNum);
 
   document.getElementById('gantt-placeholder').style.display = 'none';
   document.getElementById('gantt-table').style.display = 'table';
 
   // ヘッダー
   const thead = document.getElementById('gantt-head');
-  let headHtml = '<tr><th class="staff-name">スタッフ</th><th class="gantt-summary-col">集計</th>';
+  let headHtml = `<tr><th class="staff-name">スタッフ</th><th class="gantt-summary-col">集計</th>`
+    + `<th class="gantt-prev-carry" title="前月末日の勤務と連勤キャリー">前月末<br><span style="font-size:0.55rem">${prevM}/${prevLastDayNum}（${dayNames[prevLastDt.getDay()]}）</span></th>`;
   for (let d = 1; d <= daysInMonth; d++) {
     const dt = new Date(state.currentYear, state.currentMonth, d);
     const dow = dt.getDay();
@@ -2115,6 +2169,7 @@ function renderGantt() {
     if (cellColor === 'ng') ngStyle = 'background:#fee2e2;color:#dc2626;';
     else if (cellColor === 'warn') ngStyle = 'background:#fef9c3;color:#a16207;';
     bodyHtml += `<td class="gantt-summary-col" style="text-align:center;font-weight:700;font-size:0.75rem;${ngStyle}">${summaryLabel}</td>`;
+    bodyHtml += buildPrevCarryCellHtml(staff, ym).html;
     for (let d = 1; d <= daysInMonth; d++) {
       const dateStr = `${state.currentYear}-${String(state.currentMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
       const dt = new Date(state.currentYear, state.currentMonth, d);
@@ -2240,6 +2295,7 @@ function renderGanttFooter(daysInMonth, sortedStaff) {
   const tfoot = document.getElementById('gantt-foot');
   let ebisuRow = '<td class="staff-name" style="font-size:0.75rem;">恵比寿</td>';
   let shibuyaRow = '<td class="staff-name" style="font-size:0.75rem;">渋谷</td>';
+  const prevCarryEmpty = '<td class="gantt-prev-carry"></td>';
 
   // 充足セルのクラス・表示（p=薬剤師数, o=事務数）
   function getStatusClass(p, o) {
@@ -2294,9 +2350,9 @@ function renderGanttFooter(daysInMonth, sortedStaff) {
 
   const eSummary = '<td class="gantt-summary-col"></td>';
   const sSummary = '<td class="gantt-summary-col"></td>';
-  // staff-nameの直後に集計列の空セルを挿入
-  ebisuRow = ebisuRow.replace(/(<td class="staff-name"[^>]*>[^<]*<\/td>)/, '$1' + eSummary);
-  shibuyaRow = shibuyaRow.replace(/(<td class="staff-name"[^>]*>[^<]*<\/td>)/, '$1' + sSummary);
+  // staff-nameの直後に集計列・前月末列の空セルを挿入
+  ebisuRow = ebisuRow.replace(/(<td class="staff-name"[^>]*>[^<]*<\/td>)/, '$1' + eSummary + prevCarryEmpty);
+  shibuyaRow = shibuyaRow.replace(/(<td class="staff-name"[^>]*>[^<]*<\/td>)/, '$1' + sSummary + prevCarryEmpty);
   tfoot.innerHTML = `<tr>${ebisuRow}</tr><tr>${shibuyaRow}</tr>`;
 }
 
