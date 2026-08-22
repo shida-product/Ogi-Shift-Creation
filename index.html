@@ -7,7 +7,7 @@
   <meta name="description" content="オオギ薬局 スタッフ希望休管理ツール">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/common.css?v=11">
+  <link rel="stylesheet" href="css/common.css?v=14">
   <link rel="stylesheet" href="css/main.css?v=13">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script type="module">
@@ -37,7 +37,9 @@
     </div>
 
     <nav class="app-header__nav">
-      <div class="legend--chips">
+      <details class="legend-fold">
+        <summary class="legend-fold__summary">凡例確認</summary>
+        <div class="legend--chips legend-fold__panel" aria-label="表示の凡例">
         <div class="legend__item">
           <span class="legend__dot legend__dot--off"></span>休み希望
         </div>
@@ -62,7 +64,8 @@
         <div class="legend__item">
           <span class="legend__dot legend__dot--work-shibuya"></span>勤務（渋）
         </div>
-      </div>
+        </div>
+      </details>
 
       <button class="btn btn--outline btn--sm" id="btn-logout" style="margin-left: 16px; padding: 4px 8px; font-size: 12px; gap: 4px;">
         <i data-lucide="log-out" style="width:14px;height:14px;"></i> ログアウト

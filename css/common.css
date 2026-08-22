@@ -126,20 +126,8 @@ button { cursor: pointer; border: none; background: none; }
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
-  overflow-x: auto;
+  overflow: visible;
   white-space: nowrap;
-  scrollbar-width: thin; /* Firefox */
-  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
-}
-.app-header::-webkit-scrollbar {
-  height: 4px; /* Chrome, Safari and Opera */
-}
-.app-header::-webkit-scrollbar-track {
-  background: transparent;
-}
-.app-header::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
 }
 .app-header__title {
   font-size: var(--font-size-lg);
@@ -310,6 +298,64 @@ button { cursor: pointer; border: none; background: none; }
   color: #fff;
 }
 
+/* 凡例：ボタン1つにまとめ、展開時は縦並び */
+.legend-fold {
+  position: relative;
+  flex-shrink: 0;
+}
+.legend-fold__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  list-style: none;
+}
+.legend-fold__summary::-webkit-details-marker { display: none; }
+.legend-fold__summary::marker { content: none; }
+.legend-fold[open] .legend-fold__summary {
+  border-color: var(--color-primary);
+  background: var(--color-primary-bg);
+  color: var(--color-primary-text);
+}
+.legend-fold__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+  gap: 6px;
+  min-width: 180px;
+  max-height: min(70vh, 480px);
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+}
+.legend-fold__panel .legend__item {
+  width: 100%;
+  box-sizing: border-box;
+}
+.legend-fold__sep {
+  display: block;
+  width: 100%;
+  height: 0;
+  border-top: 1px solid var(--color-border);
+  margin: 4px 0;
+}
+
 /* Legend Chips */
 .legend--chips {
   display: flex;
@@ -333,6 +379,11 @@ button { cursor: pointer; border: none; background: none; }
   border-color: var(--color-primary-bg);
   box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
+}
+.legend-fold__panel.legend--chips {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
 }
 .legend__dot {
   width: 12px;
@@ -660,8 +711,12 @@ select.input-field,
 .other-list__item--dispense { border-left-color: #e67e22; }
 .other-list__item--ringo    { border-left-color: #E73B3B; }
 .other-list__item--other    { border-left-color: var(--color-other); }
-.other-list__item--work-ebisu   { border-left-color: #2D4FBF; }
-.other-list__item--work-shibuya { border-left-color: #E879A8; }
+.other-list__item--work-ebisu   { border-left-color: #2D4FBF; background: #dbe3fb; }
+.other-list__item--work-shibuya { border-left-color: #E879A8; background: #fbe4ee; }
+.other-list__item--work-ebisu.other-list__item--clickable:hover,
+.other-list__item--work-ebisu.is-gantt-hover { background: #c5d0f5; }
+.other-list__item--work-shibuya.other-list__item--clickable:hover,
+.other-list__item--work-shibuya.is-gantt-hover { background: #f5c6d9; }
 
 .other-list__date {
   font-weight: 700;

@@ -7,7 +7,7 @@
   <meta name="description" content="オオギ薬局 シフト自動生成・調整ツール">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/common.css?v=11">
+  <link rel="stylesheet" href="css/common.css?v=14">
   <link rel="stylesheet" href="css/generate.css?v=10">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script type="module">
@@ -36,8 +36,9 @@
     </div>
 
     <nav class="app-header__nav">
-      <!-- 凡例 -->
-      <div class="legend legend--chips" id="legend" aria-label="表示の凡例">
+      <details class="legend-fold">
+        <summary class="legend-fold__summary">凡例確認</summary>
+        <div class="legend legend--chips legend-fold__panel" id="legend" aria-label="表示の凡例">
         <div class="legend__item"><span class="legend__dot legend__dot--employee-ebisu"></span>恵比寿</div>
         <div class="legend__item"><span class="legend__dot legend__dot--am-part-ebisu"></span>AM恵</div>
         <div class="legend__item"><span class="legend__dot legend__dot--pm-part-ebisu"></span>PM恵</div>
@@ -46,14 +47,15 @@
         <div class="legend__item"><span class="legend__dot legend__dot--pm-part-shibuya"></span>PM渋</div>
         <div class="legend__item"><span class="legend__dot legend__dot--dev"></span>開発</div>
         <div class="legend__item"><span class="legend__dot legend__dot--off"></span>所定休日</div>
-        <span style="border-left:1px solid var(--color-border);margin:0 4px;"></span>
+        <span class="legend-fold__sep"></span>
         <div class="legend__item"><span class="legend__dot legend__dot--stripe-off"></span>希望休</div>
         <div class="legend__item"><span class="legend__dot legend__dot--stripe-am"></span>AM可</div>
         <div class="legend__item"><span class="legend__dot legend__dot--stripe-pm"></span>PM可</div>
         <div class="legend__item"><span class="legend__dot legend__dot--stripe-dispense"></span>調剤</div>
         <div class="legend__item"><span class="legend__dot legend__dot--fixed-ebisu"></span>勤務確定（恵）</div>
         <div class="legend__item"><span class="legend__dot legend__dot--fixed-shibuya"></span>勤務確定（渋）</div>
-      </div>
+        </div>
+      </details>
       
       <div class="header-divider"></div>
 
