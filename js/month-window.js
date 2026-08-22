@@ -1,7 +1,9 @@
 /**
  * 希望休・シフト生成の月窓
  * - 閲覧下限: 2026-04（運用開始）
- * - 閲覧上限: 今日の年月 + 3ヶ月（例: 9/1 → 12月まで、10/1 → 翌1月まで）
+ * - 閲覧上限: 毎月16日を境に約半年先まで開放
+ *   - 1〜15日: 今日の年月 + 4ヶ月（例: 8/1〜8/15 → 12月まで、9/1〜9/15 → 翌1月まで）
+ *   - 16日以降: 今日の年月 + 5ヶ月（例: 8/16〜8/31 → 翌1月まで、9/16〜9/30 → 翌2月まで）
  * - 初期表示: 1〜15日→翌月、16日以降→翌々月（編集ロックはしない）
  */
 
@@ -18,7 +20,8 @@ export function compareYearMonth(a, b) {
 }
 
 export function getMonthWindow(now = new Date()) {
-  const max = addMonths(now.getFullYear(), now.getMonth(), 3);
+  const offset = now.getDate() <= 15 ? 4 : 5;
+  const max = addMonths(now.getFullYear(), now.getMonth(), offset);
   return { min: { ...MONTH_ARCHIVE_START }, max };
 }
 
