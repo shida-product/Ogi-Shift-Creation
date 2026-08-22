@@ -2059,12 +2059,18 @@ function buildPrevCarryCellHtml(staff, yearMonth) {
   const atMax = streak >= maxConsec;
   const short = PATTERN_LABEL[pattern] || pattern.replace(/^[○◯☆]/, '').slice(0, 2);
   const markerCls = PATTERN_CSS[pattern] || 'pattern-marker--special';
-  const title = `${dateLabel}：${pattern}・${streak}連勤目（上限${maxConsec}${atMax ? '・翌日起勤不可' : ''}）`;
+  const isConsecutive = streak >= 2;
+  const title = isConsecutive
+    ? `${dateLabel}：${pattern}・${streak}勤目（${streak}連勤・上限${maxConsec}${atMax ? '・翌日起勤不可' : ''}）`
+    : `${dateLabel}：${pattern}（単日・連勤なし）`;
+  const streakHtml = isConsecutive
+    ? `<span class="prev-carry-streak">${streak}勤目</span>`
+    : '';
   return {
     html: `<td class="gantt-prev-carry${atMax ? ' is-at-max' : ''}" title="${escapeHtml(title)}">
       <div class="prev-carry-inner">
         <div class="pattern-marker ${markerCls}" data-role="${staff.role || ''}">${escapeHtml(short)}</div>
-        <span class="prev-carry-streak">${streak}連</span>
+        ${streakHtml}
       </div>
     </td>`,
   };

@@ -208,8 +208,8 @@
 
 /* 前月末（連勤キャリー）列 */
 .gantt-prev-carry {
-  min-width: 52px;
-  max-width: 64px;
+  min-width: 58px;
+  max-width: 72px;
   padding: 2px 4px !important;
   text-align: center;
   vertical-align: middle;
@@ -240,7 +240,10 @@
 }
 .gantt-prev-carry .prev-carry-streak {
   color: var(--color-text-secondary);
-  letter-spacing: 0.02em;
+  letter-spacing: 0;
+  font-size: 0.58rem;
+  white-space: nowrap;
+  line-height: 1.1;
 }
 .gantt-prev-carry.is-at-max {
   background: #fee2e2;
