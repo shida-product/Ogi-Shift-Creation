@@ -172,7 +172,8 @@ const _initView = getDefaultViewMonth();
 const state = {
   staffList: [],
   requests: [],       // shift_requests（希望休）
-  assignments: [],     // shift_assignments（生成結果）
+  assignments: [],     // shift_assignments（現行＝手直し後）
+  generatedAssignments: [], // 最後の生成直後（DBスナップショット）
   prevAssignments: [], // 前月の shift_assignments（月跨ぎ連勤チェック用）
   prevRequests: [],    // 前月の shift_requests（月跨ぎ連勤チェック用：調剤など）
   monthlySettings: {},
@@ -247,6 +248,7 @@ async function restoreFromHistory(index) {
   await saveAssignments(yearMonth, state.assignments);
   renderGantt();
   renderConditionsCheck();
+  renderDiffPanel();
   updateUndoRedoButtons();
   saveHistoryToLocal();
 }
@@ -268,6 +270,7 @@ async function handleReset() {
   await saveAssignments(getCurrentYearMonth(), state.assignments);
   renderGantt();
   renderConditionsCheck();
+  renderDiffPanel();
   updateUndoRedoButtons();
   saveHistoryToLocal();
 }
@@ -313,6 +316,8 @@ function bindEvents() {
   document.getElementById('picker-next-year').addEventListener('click', () => { pickerYear++; renderMonthPickerGrid(); });
   document.getElementById('btn-generate').addEventListener('click', handleGenerate);
   document.getElementById('btn-csv').addEventListener('click', handleCSVExport);
+  const diffCsvBtn = document.getElementById('btn-diff-csv');
+  if (diffCsvBtn) diffCsvBtn.addEventListener('click', handleDiffCsvExport);
   document.getElementById('btn-undo').addEventListener('click', handleUndo);
   document.getElementById('btn-redo').addEventListener('click', handleRedo);
   document.getElementById('btn-reset').addEventListener('click', handleReset);
@@ -598,19 +603,22 @@ async function loadExistingAssignments() {
   state.requests = await loadRequests(yearMonth);
   await loadPrevMonthContext(yearMonth);
 
-  const { data, error } = await supabase
-    .from('ogi_shift_assignments')
-    .select('*')
-    .eq('year_month', yearMonth);
-  if (error) { console.error(error); return; }
+  const [assignRes, generatedRes] = await Promise.all([
+    supabase.from('ogi_shift_assignments').select('*').eq('year_month', yearMonth),
+    supabase.from('ogi_shift_generated_assignments').select('*').eq('year_month', yearMonth),
+  ]);
+  if (assignRes.error) { console.error(assignRes.error); return; }
+  if (generatedRes.error) {
+    console.error(generatedRes.error);
+    state.generatedAssignments = [];
+  } else {
+    state.generatedAssignments = generatedRes.data || [];
+  }
 
-  state.assignments = data || [];
+  state.assignments = assignRes.data || [];
   if (state.assignments.length > 0) {
     state.hasGenerated = true;
     document.getElementById('btn-csv').disabled = false;
-    renderGantt();
-    renderConditionsCheck();
-    renderOtherList();
 
     // 初期状態を保存（リセット・Undo用）
     const localData = loadHistoryFromLocal(yearMonth);
@@ -628,15 +636,21 @@ async function loadExistingAssignments() {
       state.historyIndex = 0;
       saveHistoryToLocal();
     }
+    renderGantt();
+    renderConditionsCheck();
+    renderOtherList();
+    renderDiffPanel();
     updateUndoRedoButtons();
   } else {
     state.hasGenerated = false;
+    state.generatedAssignments = [];
     document.getElementById('btn-csv').disabled = true;
     document.getElementById('gantt-table').style.display = 'none';
     document.getElementById('gantt-placeholder').style.display = 'flex';
     const condPanel = document.getElementById('conditions-panel');
     if (condPanel) condPanel.style.display = 'none';
     renderOtherList(); // 月変更時にも条件付き一覧を更新
+    renderDiffPanel();
 
     state.baselineAssignments = null;
     state.history = [];
@@ -649,6 +663,14 @@ async function loadExistingAssignments() {
 // シフト生成アルゴリズム
 // ============================================================
 async function handleGenerate() {
+  if (state.hasGenerated) {
+    const diffCount = collectGeneratedDiffs().length;
+    const extra = diffCount > 0
+      ? `\n手動で変えたマスが ${diffCount} 件あります。`
+      : '';
+    if (!confirm(`この月のシフトを再生成します。${extra}\n生成直後の記録も新しい結果で上書きされます。`)) return;
+  }
+
   const btn = document.getElementById('btn-generate');
   btn.disabled = true;
   btn.innerHTML = '<span class="loader"></span> 生成中...';
@@ -684,12 +706,23 @@ async function handleGenerate() {
     state.lastScore = bestScore;
     state.lastBreakdown = bestBreakdown;
     await saveAssignments(yearMonth, bestAssignments);
+    const generatedAt = new Date().toISOString();
+    await saveGeneratedAssignments(yearMonth, bestAssignments, generatedAt);
+    state.generatedAssignments = bestAssignments.map(a => ({
+      year_month: a.year_month,
+      staff_id: a.staff_id,
+      date: a.date,
+      attendance_type: a.attendance_type,
+      work_pattern: a.work_pattern || '',
+      generated_at: generatedAt,
+    }));
     console.log(`シフト生成完了 スコア: ${bestScore}`, bestBreakdown);
 
     state.hasGenerated = true;
     document.getElementById('btn-csv').disabled = false;
     renderGantt();
     renderConditionsCheck();
+    renderDiffPanel();
 
     // baseline保存 + 履歴初期化
     state.baselineAssignments = cloneAssignments(state.assignments);
@@ -721,6 +754,31 @@ function _restDays(assignments, staffId) {
 }
 function _countPattern(assignments, staffId, pattern) {
   return _staffAssignments(assignments, staffId).filter(a => a.work_pattern === pattern).length;
+}
+
+const _EBISU_FULL = new Set([PATTERNS.EMPLOYEE_EBISU, PATTERNS.PART_EBISU]);
+const _EBISU_HALF = new Set([PATTERNS.AM_PART_EBISU, PATTERNS.PM_PART_EBISU]);
+const _SHIBUYA_FULL = new Set([PATTERNS.EMPLOYEE_SHIBUYA, PATTERNS.PART_SHIBUYA, PATTERNS.DEV]);
+const _SHIBUYA_HALF = new Set([PATTERNS.AM_PART_SHIBUYA, PATTERNS.PM_PART_SHIBUYA]);
+
+// 1日の店舗別 薬剤師/事務人数（半日は 0.5）
+function _dayRoleCounts(assignments, staffList, dateStr) {
+  const counts = { ebisuPharm: 0, ebisuOffice: 0, shibuyaPharm: 0, shibuyaOffice: 0 };
+  for (const a of assignments) {
+    if (a.date !== dateStr || !a.work_pattern) continue;
+    const staff = staffList.find(s => s.id === a.staff_id);
+    const bucket = staff?.role === 'pharmacist' ? 'Pharm' : staff?.role === 'office' ? 'Office' : null;
+    if (!bucket) continue;
+    let store = null;
+    let weight = 1;
+    if (_EBISU_FULL.has(a.work_pattern)) store = 'ebisu';
+    else if (_EBISU_HALF.has(a.work_pattern)) { store = 'ebisu'; weight = 0.5; }
+    else if (_SHIBUYA_FULL.has(a.work_pattern)) store = 'shibuya';
+    else if (_SHIBUYA_HALF.has(a.work_pattern)) { store = 'shibuya'; weight = 0.5; }
+    if (!store) continue;
+    counts[`${store}${bucket}`] += weight;
+  }
+  return counts;
 }
 // 前月末から継続している連勤日数を集計（月跨ぎ連勤対策）
 //   streakWork       : 前月末からの連続「実働」日数（調剤は含めない＝_maxConsecutiveWork相当）
@@ -992,17 +1050,30 @@ function runAllChecks(assignments, yearMonth) {
     for (const a of work(tokunaga.id)) {
       const dow = new Date(a.date + 'T00:00:00').getDay();
       const onoRest = ono && _restDays(assignments, ono.id).some(r => r.date === a.date);
-      if (dow === 0) { if (a.work_pattern !== PATTERNS.PART_SHIBUYA) storeViolations++; }
-      else if (onoRest) { if (a.work_pattern !== PATTERNS.PART_EBISU) storeViolations++; }
-      else { if (a.work_pattern !== PATTERNS.PART_SHIBUYA) storeViolations++; }
+      const shinodaRest = shinoda && _restDays(assignments, shinoda.id).some(r => r.date === a.date);
+      const counts = _dayRoleCounts(assignments, staffList, a.date);
+      const atEbisu = a.work_pattern === PATTERNS.PART_EBISU;
+      const atShibuya = a.work_pattern === PATTERNS.PART_SHIBUYA;
+      if (dow === 0) {
+        if (!atShibuya) storeViolations++;
+        else if (!shinodaRest && counts.shibuyaOffice > 0) storeViolations++;
+      } else if (onoRest) {
+        if (!atEbisu) storeViolations++;
+      } else if (shinodaRest) {
+        if (!atShibuya) storeViolations++;
+      } else if (!(atEbisu && counts.ebisuOffice === 0) && !(atShibuya && counts.shibuyaOffice === 0)) {
+        storeViolations++;
+      }
     }
+    const daysOk = workCount <= 22;
+    const daysWarn = workCount > 17;
     staffChecks[tokunaga.id] = {
       name: tokunaga.name, section: '薬剤師', items: [
-        { id: 'tok-days', tag: '絶対', status: workCount >= 15 && workCount <= 22 ? 'pass' : 'fail', text: '勤務日数（基本17日/MAX22日）', value: `${workCount}日`, scoreDelta: 0 },
+        { id: 'tok-days', tag: '絶対', status: !daysOk ? 'fail' : daysWarn ? 'warn' : 'pass', text: '勤務日数（穴埋め優先 / MAX22日・17日未達OK）', value: `${workCount}日`, scoreDelta: workCount > 22 ? -(workCount - 22) * 5 : 0 },
         { id: 'tok-sun', tag: '絶対', status: sundays <= 2 ? 'pass' : 'fail', text: '日曜出勤：2回まで', value: `${sundays}回`, scoreDelta: 0 },
         { id: 'tok-consec', tag: '絶対', status: consec <= 5 ? 'pass' : 'fail', text: '連勤：5連勤まで', value: _consecValueText(consecD), scoreDelta: consec > 5 ? -50 * (consec - 5) : 0 },
         { id: 'tok-disp', tag: '絶対', status: consecDispense <= 5 ? 'pass' : 'fail', text: '「調剤」の希望休を含めた連続勤務日数：5連勤まで', value: _consecValueText(consecDispD), scoreDelta: consecDispense > 5 ? -50 * (consecDispense - 5) : 0 },
-        { id: 'tok-store', tag: '絶対', status: storeViolations === 0 ? 'pass' : 'warn', text: '日曜は渋谷、それ以外は小野の出勤状況に合わせた店舗配置', value: storeViolations === 0 ? '○' : `${storeViolations}日逸脱`, scoreDelta: 0 },
+        { id: 'tok-store', tag: '絶対', status: storeViolations === 0 ? 'pass' : 'warn', text: '不足日は穴の店舗、平常日の薬2は事務0の日のみ', value: storeViolations === 0 ? '○' : `${storeViolations}日逸脱`, scoreDelta: 0 },
       ]
     };
   }
@@ -1012,7 +1083,7 @@ function runAllChecks(assignments, yearMonth) {
     const mWork = work(murakami.id).length;
     staffChecks[murakami.id] = {
       name: murakami.name, section: '薬剤師', items: [
-        { id: 'mura-days', tag: '中', status: mWork === 0 ? 'pass' : 'warn', text: '出勤日数（自動除外・手動のみ）', value: `${mWork}日`, scoreDelta: mWork > 0 ? -mWork * 10 : 0 },
+        { id: 'mura-days', tag: '中', status: mWork === 0 ? 'pass' : 'warn', text: '出勤日数（自動除外・手動のみ／希望休は反映）', value: `${mWork}日`, scoreDelta: mWork > 0 ? -mWork * 10 : 0 },
       ]
     };
   }
@@ -1458,74 +1529,11 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       }
     }
 
-    // ---- パート薬剤師（徳永）配置 ----
-    // 1. 店舗の薬剤師不足（小野休み or 信太休み）があるか？ -> 優先カバー
-    // 2. ペース配分が早すぎないか？ -> ペース通りなら出勤、早すぎたら休んで後半に温存
-    // 3. 上限：基本は17日でストップだが、不足があれば上限22日までカバーに入る（村上出動を阻止）
-    if (tokunaga && !isLocked(tokunaga.id, dateStr)) {
-      let tokunagaPattern = PATTERNS.PART_SHIBUYA;
-      let isShortage = false;
-      const onoIsOff = ono && employeeRestDays[ono.id]?.has(dateStr);
-      const shinodaIsOff = shinoda && employeeRestDays[shinoda.id]?.has(dateStr);
-
-      // 日曜は恵比寿が定休なので、必ず渋谷（isEbisuClosedチェックを最優先）
-      if (isEbisuClosed) {
-        tokunagaPattern = PATTERNS.PART_SHIBUYA;
-        // 信太が休みの場合は渋谷不足
-        if (shinodaIsOff) isShortage = true;
-      } else if (onoIsOff) {
-        tokunagaPattern = PATTERNS.PART_EBISU;
-        isShortage = true;
-      } else if (shinodaIsOff) {
-        tokunagaPattern = PATTERNS.PART_SHIBUYA;
-        isShortage = true;
-      }
-
-      const wcTok = workCounts[tokunaga.id];
-      const target = tokunaga.work_conditions?.target_days_per_month || 17;
-
-      const currentDay = new Date(dateStr + 'T00:00:00').getDate();
-      const progress = currentDay / daysInMonth;
-      const ratio = target > 0 ? (wcTok.total / target) : 0;
-      const ahead = ratio - progress;
-
-      let shouldWork = false;
-
-      // isOverflow=true を渡して、ハードリミット(22)まではブロックしないように判定
-      if (!canWork(tokunaga.id, dateStr) || !checkPartConditions(tokunaga, dateStr, true)) {
-        // 希望休、連勤MAX、または絶対上限(22)到達で完全ブロック
-        shouldWork = false;
-      } else if (isShortage) {
-        // 薬剤師が不足している日は、基本目標(17)を超えていても絶対上限(22)までは出動（村上の代わり）
-        shouldWork = true;
-      } else {
-        // 不足していない平常日
-        if (wcTok.total >= target) {
-          // すでに基本目標(17)を達成済みなら、不足日以外は休む
-          shouldWork = false;
-        } else if (ahead > 0.08) {
-          // 出勤ペースが早すぎる（前半に固まっている）なら一旦休んで後半に備える
-          shouldWork = false;
-        } else {
-          shouldWork = true;
-        }
-      }
-
-      if (shouldWork) {
-        addAssignment(tokunaga.id, dateStr, '平日', tokunagaPattern);
-      } else {
-        // 平日扱いの希望日（AM可・PM可・りんご等）は「平日（勤務なし）」として記録（所定休日にしない）
-        const tokReq = requestMap[`${tokunaga.id}_${dateStr}`];
-        const isWeekdayReq = tokReq && CSV_WEEKDAY_REQUEST_TYPES.includes(tokReq.request_type);
-        addAssignment(tokunaga.id, dateStr, isWeekdayReq ? '平日' : '所定休日', '');
-      }
-    }
-
     // ---- ◯開発 判定（自動OFF） ----
     // 運用: 初期生成では開発を入れない。手動で◯開発を入れた場合のみ残る。
     // （旧仕様: 徳永が渋谷の日に信太を◯開発へ切替・月最大2回）
 
-    // ---- 事務パート配置 ----
+    // ---- 事務パート配置（徳永より先：事1を確定してから薬を決める） ----
     // 恵比寿チーム: 木庭・中村（基本この2人で回す）
     // 渋谷チーム:   諫早・本庄（基本この2人で回す）
     // チーム内で誰も入れない場合のみ他チームからフォールバック
@@ -1679,13 +1687,41 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
       }
     }
 
+    // ---- パート薬剤師（徳永）配置（事務確定後に1回だけ） ----
+    // 薬1+事1を優先。17日到達は必須ではない。
+    // 1. 薬剤師不足の店 → 薬1（両店なら恵比寿優先、日曜は渋谷のみ）
+    // 2. 薬は足りて事務0の店 → 薬2（両店なら恵比寿優先）
+    // 3. それ以外 → 休
+    if (tokunaga && !isLocked(tokunaga.id, dateStr)) {
+      const counts = _dayRoleCounts(result, state.staffList, dateStr);
+      let tokunagaPattern = '';
+      const ebisuNeedsPharm = !isEbisuClosed && counts.ebisuPharm < 1;
+      const shibuyaNeedsPharm = counts.shibuyaPharm < 1;
+      const ebisuNeedsPharm2 = !isEbisuClosed && counts.ebisuPharm >= 1 && counts.ebisuOffice === 0;
+      const shibuyaNeedsPharm2 = counts.shibuyaPharm >= 1 && counts.shibuyaOffice === 0;
+
+      if (ebisuNeedsPharm) tokunagaPattern = PATTERNS.PART_EBISU;
+      else if (shibuyaNeedsPharm) tokunagaPattern = PATTERNS.PART_SHIBUYA;
+      else if (ebisuNeedsPharm2) tokunagaPattern = PATTERNS.PART_EBISU;
+      else if (shibuyaNeedsPharm2) tokunagaPattern = PATTERNS.PART_SHIBUYA;
+
+      const canTok = canWork(tokunaga.id, dateStr) && checkPartConditions(tokunaga, dateStr, true);
+      if (tokunagaPattern && canTok) {
+        addAssignment(tokunaga.id, dateStr, '平日', tokunagaPattern);
+      } else {
+        const tokReq = requestMap[`${tokunaga.id}_${dateStr}`];
+        const isWeekdayReq = tokReq && CSV_WEEKDAY_REQUEST_TYPES.includes(tokReq.request_type);
+        addAssignment(tokunaga.id, dateStr, isWeekdayReq ? '平日' : '所定休日', '');
+      }
+    }
+
     // ---- 村上（自動配置なし）＋充足警告 ----
-    // 村上は自動で店舗に入れない。勤務確定・手動編集・りんご希望のみ反映。
+    // 村上は店舗配置のカウント対象外・手動のみ。希望休（off）だけ生成に反映する。
+    // 勤務確定は上段の固定配置で反映済み。りんご等の出勤系は手動。
     if (murakami && !manualSet.has(`${murakami.id}_${dateStr}`) && !isFixedWork(murakami.id, dateStr)) {
       const req = requestMap[`${murakami.id}_${dateStr}`];
-      const isHolidayReq = req && !CSV_WEEKDAY_REQUEST_TYPES.includes(req.request_type);
-      const ringoPattern = (req && req.request_type === 'ringo') ? 'りんご' : '';
-      addAssignment(murakami.id, dateStr, isHolidayReq ? '所定休日' : '平日', ringoPattern);
+      const isOff = req && req.request_type === 'off';
+      addAssignment(murakami.id, dateStr, isOff ? '所定休日' : '平日', '');
     }
 
     {
@@ -1903,24 +1939,84 @@ function computeRestDays(employee, dates, daysOff, requestMap, avoidDates = new 
   return restDays;
 }
 
-// ============================================================
-// DB保存
-// ============================================================
-async function saveAssignments(yearMonth, assignments) {
-  // 既存データ削除
+function formatAssignmentCell(a) {
+  if (!a) return '（なし）';
+  const pattern = a.work_pattern || '';
+  if (pattern) return pattern;
+  return a.attendance_type || '平日';
+}
+
+function assignmentCellsEqual(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return (a.attendance_type || '平日') === (b.attendance_type || '平日')
+    && (a.work_pattern || '') === (b.work_pattern || '');
+}
+
+function getGeneratedCell(staffId, dateStr) {
+  return state.generatedAssignments.find(a => a.staff_id === staffId && a.date === dateStr) || null;
+}
+
+function collectGeneratedDiffs() {
+  if (!state.generatedAssignments.length) return [];
+  const staffById = new Map(state.staffList.map(s => [s.id, s]));
+  const diffs = [];
+  const currentByKey = new Map();
+  for (const cur of state.assignments) {
+    currentByKey.set(`${cur.staff_id}|${cur.date}`, cur);
+  }
+  for (const gen of state.generatedAssignments) {
+    const cur = currentByKey.get(`${gen.staff_id}|${gen.date}`);
+    if (assignmentCellsEqual(cur, gen)) continue;
+    const staff = staffById.get(gen.staff_id);
+    diffs.push({
+      staff_id: gen.staff_id,
+      staff_name: staff?.name || '',
+      date: gen.date,
+      from_label: formatAssignmentCell(gen),
+      to_label: formatAssignmentCell(cur),
+      from_attendance: gen.attendance_type || '平日',
+      from_pattern: gen.work_pattern || '',
+      to_attendance: cur?.attendance_type || '平日',
+      to_pattern: cur?.work_pattern || '',
+    });
+  }
+  diffs.sort((a, b) => a.staff_name.localeCompare(b.staff_name, 'ja') || a.date.localeCompare(b.date));
+  return diffs;
+}
+
+async function replaceYearMonthRows(table, yearMonth, rows) {
   const { error: delError } = await supabase
-    .from('ogi_shift_assignments')
+    .from(table)
     .delete()
     .eq('year_month', yearMonth);
   if (delError) throw delError;
 
-  // チャンクで挿入（Supabase制限対策）
   const chunkSize = 100;
-  for (let i = 0; i < assignments.length; i += chunkSize) {
-    const chunk = assignments.slice(i, i + chunkSize);
-    const { error } = await supabase.from('ogi_shift_assignments').insert(chunk);
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    const { error } = await supabase.from(table).insert(chunk);
     if (error) throw error;
   }
+}
+
+async function saveGeneratedAssignments(yearMonth, assignments, generatedAt) {
+  const rows = assignments.map(a => ({
+    year_month: a.year_month,
+    staff_id: a.staff_id,
+    date: a.date,
+    attendance_type: a.attendance_type,
+    work_pattern: a.work_pattern || '',
+    generated_at: generatedAt,
+  }));
+  await replaceYearMonthRows('ogi_shift_generated_assignments', yearMonth, rows);
+}
+
+// ============================================================
+// DB保存
+// ============================================================
+async function saveAssignments(yearMonth, assignments) {
+  await replaceYearMonthRows('ogi_shift_assignments', yearMonth, assignments);
 }
 
 // ============================================================
@@ -2047,6 +2143,9 @@ function renderGantt() {
       }
 
       if (isManual) cellClass += ' is-manual';
+      const generated = getGeneratedCell(staff.id, dateStr);
+      const differsFromGenerated = generated && !assignmentCellsEqual(assign, generated);
+      if (differsFromGenerated) cellClass += ' is-from-generated';
 
       if (pattern && PATTERN_CSS[pattern]) {
         const cssClass = PATTERN_CSS[pattern];
@@ -2067,6 +2166,9 @@ function renderGantt() {
       let requestAttrs = '';
       if (request && REQUEST_TYPE_CSS[request.request_type]) {
         requestAttrs = ` data-request-type="${request.request_type}" data-request-note="${escapeHtml(request.note || '')}"`;
+      }
+      if (differsFromGenerated) {
+        requestAttrs += ` data-gen-from="${escapeHtml(formatAssignmentCell(generated))}" data-gen-to="${escapeHtml(formatAssignmentCell(assign))}"`;
       }
 
       bodyHtml += `<td class="${cellClass}" data-staff="${staff.id}" data-date="${dateStr}"${requestAttrs}>${cellContent}</td>`;
@@ -2092,13 +2194,31 @@ function renderGantt() {
   const tooltip = document.getElementById('stripe-tooltip');
   const tooltipType = document.getElementById('stripe-tooltip-type');
   const tooltipNote = document.getElementById('stripe-tooltip-note');
+  const tooltipDiff = document.getElementById('stripe-tooltip-diff');
 
-  tbody.querySelectorAll('[data-request-type]').forEach(cell => {
+  tbody.querySelectorAll('.day-cell[data-request-type], .day-cell[data-gen-from]').forEach(cell => {
     cell.addEventListener('mouseenter', () => {
       const type = cell.dataset.requestType;
       const note = cell.dataset.requestNote || '';
-      tooltipType.textContent = `${REQUEST_TYPE_ICON[type] || ''} ${REQUEST_TYPE_LABEL[type] || type}`;
-      tooltipNote.textContent = note;
+      const genFrom = cell.dataset.genFrom;
+      if (type) {
+        tooltipType.textContent = `${REQUEST_TYPE_ICON[type] || ''} ${REQUEST_TYPE_LABEL[type] || type}`;
+        tooltipNote.textContent = note;
+        tooltipNote.style.display = note ? '' : 'none';
+      } else {
+        tooltipType.textContent = '生成からの変更';
+        tooltipNote.textContent = '';
+        tooltipNote.style.display = 'none';
+      }
+      if (tooltipDiff) {
+        if (genFrom) {
+          tooltipDiff.textContent = `生成: ${genFrom} → いま: ${cell.dataset.genTo}`;
+          tooltipDiff.style.display = '';
+        } else {
+          tooltipDiff.textContent = '';
+          tooltipDiff.style.display = 'none';
+        }
+      }
       tooltip.style.display = 'block';
     });
     cell.addEventListener('mousemove', (e) => {
@@ -2296,6 +2416,7 @@ function openCellEditor(cell, staff, dateStr) {
       state.lastBreakdown = newBreakdown;
       renderGantt();
       renderConditionsCheck();
+      renderDiffPanel();
       pushHistory();
     });
   });
@@ -2415,6 +2536,83 @@ async function downloadAsShiftJIS(text, filename) {
   a.click();
   URL.revokeObjectURL(url);
   showToast('CSVを出力しました', 'success');
+}
+
+function formatGeneratedAt(iso) {
+  if (!iso) return '';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return '';
+  const p = n => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}/${dt.getMonth() + 1}/${dt.getDate()} ${p(dt.getHours())}:${p(dt.getMinutes())}`;
+}
+
+function renderDiffPanel() {
+  const panel = document.getElementById('diff-panel');
+  if (!panel) return;
+  const badge = document.getElementById('diff-header-badge');
+  const meta = document.getElementById('diff-meta');
+  const body = document.getElementById('diff-body');
+  const csvBtn = document.getElementById('btn-diff-csv');
+
+  if (!state.hasGenerated) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+
+  if (!state.generatedAssignments.length) {
+    if (badge) {
+      badge.textContent = '記録なし';
+      badge.className = 'conditions-header-badge';
+    }
+    if (meta) meta.textContent = 'この月は生成直後の記録がありません。次回「シフト生成」から残せます。';
+    if (body) body.innerHTML = '';
+    if (csvBtn) csvBtn.disabled = true;
+    return;
+  }
+
+  const diffs = collectGeneratedDiffs();
+  const generatedAt = state.generatedAssignments[0]?.generated_at;
+  if (badge) {
+    badge.textContent = diffs.length === 0 ? '差分なし' : `${diffs.length}件`;
+    badge.className = 'conditions-header-badge ' + (diffs.length === 0 ? 'conditions-header-badge--ok' : 'conditions-header-badge--ng');
+  }
+  if (meta) meta.textContent = generatedAt ? `生成: ${formatGeneratedAt(generatedAt)}` : '';
+  if (csvBtn) csvBtn.disabled = diffs.length === 0;
+
+  if (!body) return;
+  if (diffs.length === 0) {
+    body.innerHTML = '<p class="diff-panel__empty">生成結果から手動で変えたマスはありません。</p>';
+    return;
+  }
+
+  let html = '<table class="diff-table"><thead><tr><th>スタッフ</th><th>日付</th><th>生成</th><th>いま</th></tr></thead><tbody>';
+  for (const d of diffs) {
+    const dt = new Date(d.date + 'T00:00:00');
+    html += `<tr><td>${escapeHtml(d.staff_name)}</td><td>${escapeHtml(formatDateLabel(dt))}</td><td>${escapeHtml(d.from_label)}</td><td>${escapeHtml(d.to_label)}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  body.innerHTML = html;
+}
+
+function handleDiffCsvExport() {
+  const diffs = collectGeneratedDiffs();
+  if (!diffs.length) return;
+  const yearMonth = getCurrentYearMonth();
+  const header = ['年月', 'スタッフ', '日付', '生成_勤怠', '生成_パターン', 'いま_勤怠', 'いま_パターン'];
+  const lines = [header.join(',')];
+  for (const d of diffs) {
+    const cells = [yearMonth, d.staff_name, d.date, d.from_attendance, d.from_pattern, d.to_attendance, d.to_pattern];
+    lines.push(cells.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','));
+  }
+  const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `シフト差分_${yearMonth}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('差分CSVを出力しました', 'success');
 }
 
 function loadScript(src) {

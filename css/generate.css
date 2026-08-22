@@ -322,6 +322,49 @@
   background: var(--color-danger);
 }
 
+/* 生成直後と異なるセル（ホバーで生成→いまを表示） */
+.day-cell.is-from-generated {
+  box-shadow: inset 0 0 0 1.5px rgba(244, 63, 94, 0.45);
+}
+
+.diff-panel__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.diff-panel__empty {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.diff-table th,
+.diff-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.diff-table th {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-weight: 700;
+}
+
+.stripe-tooltip__diff {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--color-danger, #e11d48);
+  font-weight: 600;
+}
+
 /* サマリークリックでガント行ハイライト */
 .gantt-table tbody tr.is-highlight td {
   animation: row-highlight 2s ease-out forwards;
@@ -894,7 +937,8 @@ tr.is-group-divider td {
 #btn-undo:disabled,
 #btn-redo:disabled,
 #btn-reset:disabled,
-#btn-csv:disabled {
+#btn-csv:disabled,
+#btn-diff-csv:disabled {
   opacity: 0.3;
   cursor: not-allowed;
   pointer-events: none;

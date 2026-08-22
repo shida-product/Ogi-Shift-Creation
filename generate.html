@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/common.css?v=16">
-  <link rel="stylesheet" href="css/generate.css?v=11">
+  <link rel="stylesheet" href="css/generate.css?v=12">
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <script type="module">
     import { checkAuth, setupLogoutButton } from './js/auth.js';
@@ -116,6 +116,20 @@
       <div class="conditions-panel__cards" id="conditions-grid"></div>
     </div>
 
+    <!-- 生成直後との差分 -->
+    <div class="card-surface conditions-panel diff-panel" id="diff-panel" style="display:none;" role="region" aria-labelledby="diff-heading">
+      <div class="conditions-panel__title" id="diff-heading">
+        <span class="conditions-panel__title-icon" aria-hidden="true"><i data-lucide="git-compare" style="width:18px;height:18px;"></i></span>
+        <span class="conditions-panel__title-text">生成からの差分</span>
+        <span class="conditions-header-badge" id="diff-header-badge"></span>
+        <span class="diff-panel__meta" id="diff-meta"></span>
+        <button class="btn btn--outline btn--sm" id="btn-diff-csv" type="button" disabled style="margin-left:auto; padding:6px 12px;">
+          <i data-lucide="download" style="width:14px;height:14px;"></i> 差分CSV
+        </button>
+      </div>
+      <div id="diff-body"></div>
+    </div>
+
     <!-- セル編集ドロップダウン -->
     <div class="cell-editor" id="cell-editor" style="display:none;">
       <div class="cell-editor__title" id="cell-editor-title"></div>
@@ -145,11 +159,12 @@
   <div class="stripe-tooltip" id="stripe-tooltip" style="display:none;">
     <div class="stripe-tooltip__type" id="stripe-tooltip-type"></div>
     <div class="stripe-tooltip__note" id="stripe-tooltip-note"></div>
+    <div class="stripe-tooltip__diff" id="stripe-tooltip-diff"></div>
   </div>
 
   <!-- Supabase CDN -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-  <script type="module" src="js/generate.js?v=28"></script>
+  <script type="module" src="js/generate.js?v=30"></script>
   <script>lucide.createIcons();</script>
 </body>
 </html>

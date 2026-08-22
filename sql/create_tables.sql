@@ -6,6 +6,7 @@
 
 -- 既存テーブルの削除（依存関係の順序に注意）
 DROP TABLE IF EXISTS ogi_shift_assignments CASCADE;
+DROP TABLE IF EXISTS ogi_shift_generated_assignments CASCADE;
 DROP TABLE IF EXISTS ogi_shift_requests CASCADE;
 DROP TABLE IF EXISTS ogi_monthly_settings CASCADE;
 DROP TABLE IF EXISTS ogi_staff CASCADE;
@@ -67,6 +68,23 @@ CREATE TABLE ogi_shift_assignments (
 
 CREATE INDEX idx_ogi_shift_assignments_yearmonth ON ogi_shift_assignments(year_month);
 CREATE INDEX idx_ogi_shift_assignments_date ON ogi_shift_assignments(date);
+
+-- ============================================================
+-- 3b. ogi_shift_generated_assignments（最後の生成直後）
+-- ============================================================
+-- 現行シフトは ogi_shift_assignments。こちらは生成ボタン時点のコピー。
+CREATE TABLE ogi_shift_generated_assignments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  year_month TEXT NOT NULL,
+  staff_id UUID NOT NULL REFERENCES ogi_staff(id) ON DELETE CASCADE,
+  date DATE NOT NULL,
+  attendance_type TEXT NOT NULL DEFAULT '平日',
+  work_pattern TEXT DEFAULT '',
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(staff_id, date)
+);
+
+CREATE INDEX idx_ogi_shift_generated_assignments_yearmonth ON ogi_shift_generated_assignments(year_month);
 
 -- ============================================================
 -- 4. ogi_monthly_settings テーブル（月別公休数設定）
