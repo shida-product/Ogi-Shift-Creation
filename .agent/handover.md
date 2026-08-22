@@ -1,13 +1,11 @@
 # 引継ぎメモ（最終更新: 2026-08-22）
 
 ## 現在地
-配置順を「事務→徳永（実人数1回）」に変更済み。村上は希望休のみ生成反映・店舗は手動のみ。
+生成直後スナップショット対応をコミット・push済み（`b5b9041`）。
+本番で `sql/add_generated_assignments.sql` も実行済み。
 
 ## 次の行動
-- 10月を再生成し、平常日の薬2が消えること／事務0の日だけ薬2になることを確認
-- 村上の希望休日が所定休日になっていること、りんご等が自動で入らないことを確認
-- 必要ならコミット（未依頼なら作らない）
+- 特になし（ブラウザで生成→手直し→差分確認は任意）
 
 ## キャッシュ
-- `index.html` CSS `common.css?v=16` / JS `main.js?v=15`
-- `generate.html` CSS `common.css?v=16` / `generate.css?v=11` / JS `generate.js?v=30`
+- `generate.html` CSS `common.css?v=16` / `generate.css?v=12` / JS `generate.js?v=30`
