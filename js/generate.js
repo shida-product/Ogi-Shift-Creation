@@ -215,6 +215,39 @@ function cloneAssignments(assignments) {
   return assignments.map(a => ({ ...a }));
 }
 
+/** 表示・共有の正は DB。比較用に勤怠内容だけ指紋化する（id 等は無視） */
+function fingerprintAssignments(assignments) {
+  return (assignments || [])
+    .map(a => `${a.staff_id}|${a.date}|${a.attendance_type || ''}|${a.work_pattern || ''}|${a.is_manual_override ? 1 : 0}`)
+    .sort()
+    .join('\n');
+}
+
+function assignmentsContentEqual(a, b) {
+  return fingerprintAssignments(a) === fingerprintAssignments(b);
+}
+
+/** Undo 用履歴を DB の現行に合わせて初期化（生成直後があれば Reset 先にする） */
+function initHistoryFromDb(assignments) {
+  const current = cloneAssignments(assignments);
+  if (state.generatedAssignments.length > 0) {
+    state.baselineAssignments = cloneAssignments(state.generatedAssignments).map(a => ({
+      year_month: a.year_month,
+      staff_id: a.staff_id,
+      date: a.date,
+      attendance_type: a.attendance_type,
+      work_pattern: a.work_pattern || '',
+      is_manual_override: false,
+    }));
+  } else {
+    state.baselineAssignments = cloneAssignments(current);
+  }
+  state.history = [current];
+  state.historyIndex = 0;
+  saveHistoryToLocal();
+  updateUndoRedoButtons();
+}
+
 // 履歴にpush（手動変更時に呼ぶ）
 function pushHistory() {
   // 現在位置より先の履歴を切り捨て（redoスタックをクリア）
@@ -329,6 +362,50 @@ function bindEvents() {
     }
   });
   setupGanttHover();
+
+  // 他 PC での保存を取り込む（タブが前面に戻ったとき）
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') syncAssignmentsFromDbIfChanged();
+  });
+  window.addEventListener('focus', () => syncAssignmentsFromDbIfChanged());
+}
+
+let _syncAssignmentsInFlight = false;
+async function syncAssignmentsFromDbIfChanged() {
+  if (_syncAssignmentsInFlight) return;
+  const editor = document.getElementById('cell-editor');
+  if (editor && editor.style.display !== 'none') return; // 編集中は上書きしない
+  if (!state.hasGenerated) return;
+
+  _syncAssignmentsInFlight = true;
+  try {
+    const yearMonth = getCurrentYearMonth();
+    const [assignRes, generatedRes] = await Promise.all([
+      supabase.from('ogi_shift_assignments').select('*').eq('year_month', yearMonth),
+      supabase.from('ogi_shift_generated_assignments').select('*').eq('year_month', yearMonth),
+    ]);
+    if (assignRes.error) return;
+    const remote = assignRes.data || [];
+    if (!generatedRes.error) state.generatedAssignments = generatedRes.data || [];
+
+    if (remote.length === 0) {
+      if (state.assignments.length > 0) await loadExistingAssignments();
+      return;
+    }
+    if (assignmentsContentEqual(remote, state.assignments)) return;
+
+    state.assignments = remote;
+    initHistoryFromDb(state.assignments);
+    renderGantt();
+    renderConditionsCheck();
+    renderOtherList();
+    renderDiffPanel();
+    showToast('他の端末の変更を反映しました', 'success');
+  } catch (e) {
+    console.error(e);
+  } finally {
+    _syncAssignmentsInFlight = false;
+  }
 }
 
 // ============================================================
@@ -615,32 +692,27 @@ async function loadExistingAssignments() {
     state.generatedAssignments = generatedRes.data || [];
   }
 
+  // 表示の正は常に DB（手動修正も upsert / save 済み）。localStorage は Undo 用のみ。
   state.assignments = assignRes.data || [];
   if (state.assignments.length > 0) {
     state.hasGenerated = true;
     document.getElementById('btn-csv').disabled = false;
 
-    // 初期状態を保存（リセット・Undo用）
     const localData = loadHistoryFromLocal(yearMonth);
-    // DBの内容と大きく乖離していない前提で、ローカルキャッシュに履歴があれば復元
-    if (localData && localData.history && localData.history.length > 0) {
-      state.baselineAssignments = localData.baseline;
+    const tip = localData?.history?.[localData.historyIndex ?? (localData.history?.length - 1)];
+    // 同じ PC で Undo を続けられるのは、ローカル先端が DB と一致するときだけ
+    if (localData?.history?.length > 0 && tip && assignmentsContentEqual(tip, state.assignments)) {
+      state.baselineAssignments = localData.baseline || cloneAssignments(state.assignments);
       state.history = localData.history;
       state.historyIndex = localData.historyIndex ?? (localData.history.length - 1);
-      // DBよりもローカルの最新履歴（未保存状態など）を優先して復元する
-      state.assignments = cloneAssignments(state.history[state.historyIndex]);
-      // もしDBと同期させたい場合はここでsaveAssignmentsを呼ぶのもあり
+      updateUndoRedoButtons();
     } else {
-      state.baselineAssignments = cloneAssignments(state.assignments);
-      state.history = [cloneAssignments(state.assignments)];
-      state.historyIndex = 0;
-      saveHistoryToLocal();
+      initHistoryFromDb(state.assignments);
     }
     renderGantt();
     renderConditionsCheck();
     renderOtherList();
     renderDiffPanel();
-    updateUndoRedoButtons();
   } else {
     state.hasGenerated = false;
     state.generatedAssignments = [];
