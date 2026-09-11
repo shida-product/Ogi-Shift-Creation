@@ -15,6 +15,12 @@ import {
   isMonthInWindow,
   compareYearMonth,
 } from './month-window.js';
+import {
+  createRequestSnapshot,
+  enumerateDates,
+  getRemovedRequestIds,
+  getRequestChanges,
+} from './request-edit.js';
 
 // ============================================================
 // スタッフカラーパレット（個人別色分け・カレンダー表示用）
@@ -1083,10 +1089,16 @@ function openModal(staffId, dates) {
     const historyList = document.getElementById('modal-history-list');
     historyList.innerHTML = '';
     if (existing.created_at) {
-      historyList.innerHTML += `<li>${formatDateTime(existing.created_at)} に登録</li>`;
+      appendHistoryItem(historyList, `${formatDateTime(existing.created_at)} に登録`);
     }
-    if (existing.updated_at && existing.updated_at !== existing.created_at) {
-      historyList.innerHTML += `<li>${formatDateTime(existing.updated_at)} に更新</li>`;
+    const changeHistory = Array.isArray(existing.change_history) ? existing.change_history : [];
+    for (const entry of changeHistory) {
+      const changes = getRequestChanges(entry.before, entry.after, getStaffName);
+      appendHistoryItem(historyList, `${formatDateTime(entry.changed_at)} に更新：${changes.join('、')}`);
+    }
+    // 履歴カラム導入前の更新は内容を復元できないため、日時だけを表示する。
+    if (changeHistory.length === 0 && existing.updated_at && existing.updated_at !== existing.created_at) {
+      appendHistoryItem(historyList, `${formatDateTime(existing.updated_at)} に更新（変更内容の記録なし）`);
     }
     document.getElementById('modal-history').style.display = 'block';
   } else {
@@ -1130,14 +1142,28 @@ async function handleModalSave() {
     return;
   }
 
-  const targetDates = [];
-  const currDt = new Date(startStr + 'T00:00:00');
-  const endDt = new Date(endStr + 'T00:00:00');
-  
-  while (currDt <= endDt) {
-    targetDates.push(formatDate(currDt));
-    currDt.setDate(currDt.getDate() + 1);
+  const targetDates = enumerateDates(startStr, endStr);
+  const originalRequests = state.editingRequest
+    ? state.requests.filter(request => request.staff_id === state.editingStaffId && state.editingDates.includes(request.date))
+    : [];
+  const before = state.editingRequest
+    ? createRequestSnapshot(
+      state.editingStaffId,
+      state.editingDates,
+      state.editingRequest.request_type,
+      state.editingRequest.note,
+    )
+    : null;
+  const after = createRequestSnapshot(staffId, targetDates, type, note);
+  const changes = before ? getRequestChanges(before, after, getStaffName) : [];
+
+  if (before && changes.length === 0) {
+    closeModal();
+    return;
   }
+
+  const changedAt = new Date().toISOString();
+  const historyEntry = before ? { changed_at: changedAt, before, after } : null;
 
   const toUpdate = [];
   const toInsert = [];
@@ -1153,20 +1179,43 @@ async function handleModalSave() {
 
   // UPDATE処理（既存レコードがある日は上書き）
   for (const req of toUpdate) {
+    const changeHistory = Array.isArray(req.change_history) ? req.change_history : [];
     const { error } = await supabase.from('ogi_shift_requests')
-      .update({ request_type: type, note: note || null, updated_at: new Date().toISOString() })
+      .update({
+        request_type: type,
+        note: note || null,
+        change_history: historyEntry ? [...changeHistory, historyEntry] : changeHistory,
+        updated_at: changedAt,
+      })
       .eq('id', req.id);
     if (error) { console.error(error); alert('更新に失敗: ' + error.message); return; }
   }
 
   // INSERT処理（無い日は新規追加）
   if (toInsert.length > 0) {
+    const originalCreatedAt = originalRequests
+      .map(request => request.created_at)
+      .filter(Boolean)
+      .sort()[0];
+    const originalHistory = Array.isArray(state.editingRequest?.change_history)
+      ? state.editingRequest.change_history
+      : [];
     const rows = toInsert.map(d => ({
       staff_id: staffId, date: d, request_type: type,
-      note: note || null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      note: note || null,
+      change_history: historyEntry ? [...originalHistory, historyEntry] : [],
+      created_at: originalCreatedAt || changedAt,
+      updated_at: changedAt,
     }));
     const { error } = await supabase.from('ogi_shift_requests').insert(rows);
     if (error) { console.error(error); alert('登録に失敗: ' + error.message); return; }
+  }
+
+  // 元の期間から外れた日を削除する（例: 9/16〜17 を 9/16 に短縮した場合の 9/17）。
+  const removedIds = getRemovedRequestIds(originalRequests, staffId, targetDates);
+  if (removedIds.length > 0) {
+    const { error } = await supabase.from('ogi_shift_requests').delete().in('id', removedIds);
+    if (error) { console.error(error); alert('期間変更の保存に失敗: ' + error.message); return; }
   }
 
   closeModal();
@@ -1243,6 +1292,16 @@ function formatDate(dt) {
 function formatDateTime(isoStr) {
   const dt = new Date(isoStr);
   return `${dt.getMonth() + 1}/${dt.getDate()} ${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+}
+
+function getStaffName(staffId) {
+  return state.staffList.find(staff => staff.id === staffId)?.name || staffId;
+}
+
+function appendHistoryItem(list, text) {
+  const item = document.createElement('li');
+  item.textContent = text;
+  list.appendChild(item);
 }
 function escapeHtml(str) {
   const div = document.createElement('div');

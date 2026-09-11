@@ -83,6 +83,7 @@
 | date | date | 希望日 |
 | request_type | text | `off` / `dispense` / `am` / `pm` / `ringo` / `work_ebisu` / `work_shibuya` / `other` |
 | note | text | 備考 |
+| change_history | jsonb | 更新前後（期間・希望区分・備考・スタッフ）の履歴 |
 
 ### `ogi_shift_assignments`（シフト生成結果）
 | カラム | 型 | 説明 |

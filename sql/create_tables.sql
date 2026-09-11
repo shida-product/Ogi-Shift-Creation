@@ -40,6 +40,7 @@ CREATE TABLE ogi_shift_requests (
   date DATE NOT NULL,
   request_type TEXT NOT NULL CHECK (request_type IN ('off', 'am', 'pm', 'other', 'dispense', 'ringo', 'work_ebisu', 'work_shibuya')),
   note TEXT,
+  change_history JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE(staff_id, date)

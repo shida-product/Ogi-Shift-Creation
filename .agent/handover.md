@@ -6,5 +6,8 @@
 ## 次の行動
 - 特になし
 
+## 外部状態
+- 本番 Supabase の `ogi_shift_requests.change_history` カラムは追加済み。
+
 ## キャッシュ
 - `generate.html` CSS `generate.css?v=14` / JS `generate.js?v=34`
