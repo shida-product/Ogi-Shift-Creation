@@ -789,6 +789,7 @@ function showDayDetail(dateStr) {
   // タイトル（祝日ラベル付き）
   const titleEl = document.getElementById('bottom-sheet-title');
   titleEl.textContent = title;
+  document.getElementById('bottom-sheet-count').textContent = `${dayReqs.length}件`;
   if (holiday) {
     const badge = document.createElement('span');
     badge.textContent = ` ${holiday}`;
@@ -799,7 +800,10 @@ function showDayDetail(dateStr) {
   // ボトムシートの中身
   let bodyHtml = '';
   if (dayReqs.length === 0) {
-    bodyHtml = '<p style="font-size:var(--font-size-sm);color:var(--color-text-muted);padding:4px 0 8px;">この日の希望はありません</p>';
+    bodyHtml = `<div class="day-detail__empty">
+      <i data-lucide="calendar-plus" class="day-detail__empty-icon"></i>
+      <p>この日の希望はありません</p>
+    </div>`;
   } else {
     bodyHtml = '<ul class="day-detail__list">';
     dayReqs.forEach(r => {
@@ -819,18 +823,13 @@ function showDayDetail(dateStr) {
         : '';
       bodyHtml += `<li class="day-detail__item day-detail__item--tappable" data-staff-id="${r.staff_id}" data-date="${dateStr}">
         <span class="day-detail__name">${escapeHtml(r.staff?.name || '?')}</span>
-        <span class="cal-evt ${evtCls}" style="padding:3px 10px;border-radius:var(--radius-full);flex-shrink:0;">${type}</span>
+        <span class="cal-evt day-detail__type ${evtCls}">${type}</span>
         <i data-lucide="chevron-right" class="day-detail__chevron"></i>
         ${note}
       </li>`;
     });
     bodyHtml += '</ul>';
   }
-
-  // 新規登録ボタン（常に表示、スタッフ未選択時はモーダル内で選択）
-  bodyHtml += `<button class="btn btn--primary btn--sm" style="width:100%;margin-top:14px;" id="bottom-sheet-add">
-    <i data-lucide="plus" style="width:14px;height:14px;"></i> 新規登録
-  </button>`;
 
   document.getElementById('bottom-sheet-body').innerHTML = bodyHtml;
   document.getElementById('bottom-sheet-overlay').classList.add('active');
@@ -857,6 +856,7 @@ function closeBottomSheet() {
   if (!overlay) return;
   overlay.classList.remove('active');
   document.getElementById('bottom-sheet-title').textContent = '';
+  document.getElementById('bottom-sheet-count').textContent = '';
   document.getElementById('bottom-sheet-body').innerHTML = '';
   document.querySelectorAll('.calendar-grid__cell.is-selected').forEach(c => c.classList.remove('is-selected'));
 }
