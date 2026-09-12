@@ -227,6 +227,18 @@ function assignmentsContentEqual(a, b) {
   return fingerprintAssignments(a) === fingerprintAssignments(b);
 }
 
+/** 希望休も他端末で変わりうるため、比較用に内容だけ指紋化する */
+function fingerprintRequests(requests) {
+  return (requests || [])
+    .map(r => `${r.staff_id}|${r.date}|${r.request_type}|${r.note || ''}`)
+    .sort()
+    .join('\n');
+}
+
+function requestsContentEqual(a, b) {
+  return fingerprintRequests(a) === fingerprintRequests(b);
+}
+
 /** Undo 用履歴を DB の現行に合わせて初期化（生成直後があれば Reset 先にする） */
 function initHistoryFromDb(assignments) {
   const current = cloneAssignments(assignments);
@@ -375,11 +387,26 @@ async function syncAssignmentsFromDbIfChanged() {
   if (_syncAssignmentsInFlight) return;
   const editor = document.getElementById('cell-editor');
   if (editor && editor.style.display !== 'none') return; // 編集中は上書きしない
-  if (!state.hasGenerated) return;
 
   _syncAssignmentsInFlight = true;
   try {
     const yearMonth = getCurrentYearMonth();
+
+    // 希望休は他端末（希望休ページ）で追加・変更されうる。
+    // 生成そのものは handleGenerate で再取得するが、ガントのストライプ・希望一覧・
+    // 条件チェック・CSV の勤怠区分は state.requests を見るため、ここでも取り込む。
+    const remoteRequests = await loadRequests(yearMonth);
+    const requestsChanged = !requestsContentEqual(remoteRequests, state.requests);
+    if (requestsChanged) state.requests = remoteRequests;
+
+    if (!state.hasGenerated) {
+      if (requestsChanged) {
+        renderOtherList();
+        showToast('希望休の変更を反映しました', 'success');
+      }
+      return;
+    }
+
     const [assignRes, generatedRes] = await Promise.all([
       supabase.from('ogi_shift_assignments').select('*').eq('year_month', yearMonth),
       supabase.from('ogi_shift_generated_assignments').select('*').eq('year_month', yearMonth),
@@ -392,15 +419,22 @@ async function syncAssignmentsFromDbIfChanged() {
       if (state.assignments.length > 0) await loadExistingAssignments();
       return;
     }
-    if (assignmentsContentEqual(remote, state.assignments)) return;
 
-    state.assignments = remote;
-    initHistoryFromDb(state.assignments);
+    const assignmentsChanged = !assignmentsContentEqual(remote, state.assignments);
+    if (!assignmentsChanged && !requestsChanged) return;
+
+    if (assignmentsChanged) {
+      state.assignments = remote;
+      initHistoryFromDb(state.assignments);
+    }
     renderGantt();
     renderConditionsCheck();
     renderOtherList();
     renderDiffPanel();
-    showToast('他の端末の変更を反映しました', 'success');
+    showToast(
+      assignmentsChanged ? '他の端末の変更を反映しました' : '希望休の変更を反映しました',
+      'success',
+    );
   } catch (e) {
     console.error(e);
   } finally {
@@ -627,7 +661,8 @@ function renderOtherList() {
 // ============================================================
 async function loadData() {
   const [staffRes, settingsRes] = await Promise.all([
-    supabase.from('ogi_staff').select('*').order('display_order'),
+    // 希望休ページ（main.js の loadStaffList）と同じ条件にそろえる
+    supabase.from('ogi_staff').select('*').eq('is_active', true).order('display_order'),
     supabase.from('ogi_monthly_settings').select('*'),
   ]);
   if (staffRes.error) { console.error(staffRes.error); return; }
@@ -1375,6 +1410,7 @@ function generateShifts(yearMonth, manualOverrides, manualSet, randomize = false
 
     // 希望休/調剤/AM可/PM可チェック
     // AM可・PM可は「出勤拒否ではないが丸1日出勤はできない」扱いのため、シフトには入れない
+    // 「その他」（other）は備考を人が読んで手動調整する運用のため、ここでは出勤禁止にしない
     const req = requestMap[`${staffId}_${dateStr}`];
     if (req && (req.request_type === 'off' || req.request_type === 'dispense' || req.request_type === 'am' || req.request_type === 'pm')) return false;
 
