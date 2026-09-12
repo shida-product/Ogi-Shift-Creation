@@ -21,6 +21,7 @@ import {
   getRemovedRequestIds,
   getRequestChanges,
   findRequestInDates,
+  hasUniformRequests,
   resolveEditingSource,
 } from './request-edit.js';
 
@@ -1197,7 +1198,9 @@ async function handleModalSave() {
   const after = createRequestSnapshot(staffId, targetDates, type, note);
   const changes = before ? getRequestChanges(before, after, getStaffName) : [];
 
-  if (before && changes.length === 0) {
+  // 変更前スナップショットは代表1件の区分・備考しか持たないため、対象期間に別区分が
+  // 混ざっている場合は「変更なし」と判定せず、上書き保存まで進める
+  if (before && changes.length === 0 && hasUniformRequests(originalRequests, type, note)) {
     closeModal();
     return;
   }

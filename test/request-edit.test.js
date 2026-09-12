@@ -6,6 +6,7 @@ import {
   getRemovedRequestIds,
   getRequestChanges,
   findRequestInDates,
+  hasUniformRequests,
   resolveEditingSource,
 } from '../js/request-edit.js';
 
@@ -154,4 +155,36 @@ test('新規登録で日付を変更しても、開いた日に入っている�
   assert.equal(source.request, null);
   assert.deepEqual(source.removableRequests, []);
   assert.deepEqual(getRemovedRequestIds(source.removableRequests, 'staff-b', ['2026-09-21']), []);
+});
+
+test('区分が混在した期間の上書きは「変更なし」と判定しない', () => {
+  const requests = [
+    { id: 'req-1', staff_id: 'staff-1', date: '2026-09-01', request_type: 'off', note: null },
+    { id: 'req-2', staff_id: 'staff-1', date: '2026-09-02', request_type: 'am', note: null },
+  ];
+
+  // 9/1〜9/2 をまとめて「休み希望」で保存するケース。
+  // 変更前スナップショットは先頭(9/1, off)を代表とするため、区分の差分は検出されない
+  const source = resolveEditingSource({
+    mode: 'create',
+    editingStaffId: 'staff-1',
+    editingRequest: null,
+    editingDates: ['2026-09-01'],
+    targetDates: enumerateDates('2026-09-01', '2026-09-02'),
+    selectedStaffId: 'staff-1',
+    requests,
+  });
+  const before = createRequestSnapshot(
+    source.staffId,
+    source.originalRequests.map(r => r.date),
+    source.request.request_type,
+    source.request.note,
+  );
+  const after = createRequestSnapshot('staff-1', enumerateDates('2026-09-01', '2026-09-02'), 'off', '');
+  assert.deepEqual(getRequestChanges(before, after), []);   // 差分は出ない
+
+  // それでも 9/2 は 'am' のままなので、保存をスキップしてはいけない
+  assert.equal(hasUniformRequests(source.originalRequests, 'off', ''), false);
+  assert.equal(hasUniformRequests([requests[0]], 'off', ''), true);
+  assert.equal(hasUniformRequests([requests[0]], 'off', 'メモ'), false);
 });

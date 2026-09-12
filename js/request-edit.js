@@ -80,6 +80,14 @@ export function findRequestInDates(requests, staffId, dates) {
     .sort((a, b) => a.date.localeCompare(b.date))[0] || null;
 }
 
+// 対象レコードがすべて同じ区分・備考かどうか。
+// 「変更前」スナップショットは代表1件の区分・備考しか持たないため、
+// 区分が混在した期間をまとめて上書きするときに「変更なし」と誤判定しないよう、
+// 保存をスキップしてよいかの判定に使う。
+export function hasUniformRequests(requests, requestType, note) {
+  return (requests || []).every(r => r.request_type === requestType && (r.note || '') === (note || ''));
+}
+
 // 保存時に「変更前」として扱うレコードを解決する。
 // mode='edit'（既存の希望をタップして開いた）のときだけ、開いた時点のスタッフ・対象日を
 // 変更前として扱う（＝スタッフ変更や期間短縮は付け替えとみなし、元レコードを削除する）。

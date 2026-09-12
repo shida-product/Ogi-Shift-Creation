@@ -396,7 +396,9 @@ async function syncAssignmentsFromDbIfChanged() {
     // 生成そのものは handleGenerate で再取得するが、ガントのストライプ・希望一覧・
     // 条件チェック・CSV の勤怠区分は state.requests を見るため、ここでも取り込む。
     const remoteRequests = await loadRequests(yearMonth);
-    const requestsChanged = !requestsContentEqual(remoteRequests, state.requests);
+    // 取得失敗（null）のときは古くても既存データを保持する（消えたように見せない）
+    const requestsChanged = remoteRequests !== null
+      && !requestsContentEqual(remoteRequests, state.requests);
     if (requestsChanged) state.requests = remoteRequests;
 
     if (!state.hasGenerated) {
@@ -684,8 +686,13 @@ async function loadRequests(yearMonth) {
     .select('*')
     .gte('date', startDate)
     .lte('date', endDate);
-  if (error) { console.error(error); return []; }
-  return data || [];
+  // 取得失敗を「0件」と取り違えると希望休が消えたように見えるため、null を返して区別する
+  if (error) { console.error(error); return null; }
+  const rows = data || [];
+  // 退職者の希望はガントに行がなく一覧でも「不明」になるため、在籍スタッフ分だけ扱う
+  if (state.staffList.length === 0) return rows;
+  const activeIds = new Set(state.staffList.map(s => s.id));
+  return rows.filter(r => activeIds.has(r.staff_id));
 }
 
 // "YYYY-MM" の前月を "YYYY-MM" で返す
@@ -706,13 +713,17 @@ async function loadPrevMonthContext(yearMonth) {
   if (assignRes.error) { console.error(assignRes.error); state.prevAssignments = []; }
   else { state.prevAssignments = assignRes.data || []; }
   state.prevRequests = prevReqs || [];
+  // 前月の希望休が取れないと月跨ぎ連勤チェックが甘くなるため、成否を返す
+  return !assignRes.error && prevReqs !== null;
 }
 
 async function loadExistingAssignments() {
   const yearMonth = getCurrentYearMonth();
 
   // 描画のための希望休データ・前月コンテキストを先にロード
-  state.requests = await loadRequests(yearMonth);
+  const requests = await loadRequests(yearMonth);
+  if (requests === null) showToast('希望休の取得に失敗しました', 'error');
+  state.requests = requests || [];
   await loadPrevMonthContext(yearMonth);
 
   const [assignRes, generatedRes] = await Promise.all([
@@ -784,8 +795,12 @@ async function handleGenerate() {
 
   try {
     const yearMonth = getCurrentYearMonth();
-    state.requests = await loadRequests(yearMonth);
-    await loadPrevMonthContext(yearMonth);
+    // 希望休が取得できないまま生成すると、希望休を無視したシフトができてしまう
+    const requests = await loadRequests(yearMonth);
+    if (requests === null) throw new Error('希望休を取得できませんでした。通信状況を確認して再度お試しください');
+    state.requests = requests;
+    const prevOk = await loadPrevMonthContext(yearMonth);
+    if (!prevOk) throw new Error('前月のシフト・希望休を取得できませんでした。通信状況を確認して再度お試しください');
 
     // スコアリング生成：複数回試行して最高スコアを採用
     const TRIAL_COUNT = 30;
