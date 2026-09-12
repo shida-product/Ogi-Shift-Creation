@@ -72,6 +72,14 @@ function formatDate(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// 指定スタッフ・指定日付群のうち、最も早い日の既存希望を返す。
+export function findRequestInDates(requests, staffId, dates) {
+  const dateSet = new Set(dates);
+  return requests
+    .filter(r => r.staff_id === staffId && dateSet.has(r.date))
+    .sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+}
+
 // 保存時に「変更前」として扱うレコードを解決する。
 // mode='edit'（既存の希望をタップして開いた）のときだけ、開いた時点のスタッフ・対象日を
 // 変更前として扱う（＝スタッフ変更や期間短縮は付け替えとみなし、元レコードを削除する）。

@@ -20,6 +20,7 @@ import {
   enumerateDates,
   getRemovedRequestIds,
   getRequestChanges,
+  findRequestInDates,
   resolveEditingSource,
 } from './request-edit.js';
 
@@ -1039,6 +1040,19 @@ document.getElementById('modal-staff-select').addEventListener('change', (e) => 
   updateDispenseVisibility(e.target.value);
 });
 
+function findFirstRequestInDates(staffId, dates) {
+  return findRequestInDates(state.requests, staffId, dates);
+}
+
+// 希望休を入力できる日付範囲（開放月の初日〜最終日）
+function getRequestDateRange() {
+  const { min, max } = getMonthWindow();
+  return {
+    min: formatDate(new Date(min.year, min.month, 1)),
+    max: formatDate(new Date(max.year, max.month + 1, 0)),
+  };
+}
+
 function openModal(staffId, dates, mode = 'edit') {
   state.editingStaffId = staffId;
   state.editingDates = dates;
@@ -1077,11 +1091,16 @@ function openModal(staffId, dates, mode = 'edit') {
   startInput.value = startDate;
   endInput.value = endDate;
 
-  // 複数日でも先頭日付に既存データがあれば編集モード
+  // 開放月の範囲外を手入力で登録できないようにする
+  const dateRange = getRequestDateRange();
+  startInput.min = dateRange.min;
+  startInput.max = dateRange.max;
+  endInput.min = dateRange.min;
+  endInput.max = dateRange.max;
+
+  // 選択範囲内のいずれかの日に既存データがあれば編集モード（先頭日とは限らない）
   // 新規登録（mode='create'）では既定スタッフの既存希望を読み込まない
-  const existing = mode === 'edit'
-    ? state.requests.find(r => r.staff_id === staffId && r.date === dates[0])
-    : null;
+  const existing = mode === 'edit' ? findFirstRequestInDates(staffId, dates) : null;
   state.editingRequest = existing || null;
 
   if (existing) {
@@ -1148,6 +1167,12 @@ async function handleModalSave() {
     alert('終了日は開始日以降の日付を選択してください');
     return;
   }
+  // 入力欄の min/max は手入力で回避できるため、保存時にも開放月の範囲を確認する
+  const dateRange = getRequestDateRange();
+  if (startStr < dateRange.min || endStr > dateRange.max) {
+    alert(`希望休を登録できるのは ${dateRange.min} 〜 ${dateRange.max} の範囲です`);
+    return;
+  }
 
   const targetDates = enumerateDates(startStr, endStr);
   const source = resolveEditingSource({
@@ -1163,7 +1188,8 @@ async function handleModalSave() {
   const before = source.request
     ? createRequestSnapshot(
       source.staffId,
-      state.editingDates,
+      // 選択範囲すべてではなく、実際に希望が入っている日付を「変更前」の期間とする
+      originalRequests.map(request => request.date),
       source.request.request_type,
       source.request.note,
     )
@@ -1202,7 +1228,7 @@ async function handleModalSave() {
         updated_at: changedAt,
       })
       .eq('id', req.id);
-    if (error) { console.error(error); alert('更新に失敗: ' + error.message); return; }
+    if (error) { console.error(error); alert('更新に失敗: ' + error.message); await loadRequests(); return; }
   }
 
   // INSERT処理（無い日は新規追加）
@@ -1222,14 +1248,14 @@ async function handleModalSave() {
       updated_at: changedAt,
     }));
     const { error } = await supabase.from('ogi_shift_requests').insert(rows);
-    if (error) { console.error(error); alert('登録に失敗: ' + error.message); return; }
+    if (error) { console.error(error); alert('登録に失敗: ' + error.message); await loadRequests(); return; }
   }
 
   // 元の期間から外れた日を削除する（例: 9/16〜17 を 9/16 に短縮した場合の 9/17）。
   const removedIds = getRemovedRequestIds(source.removableRequests, staffId, targetDates);
   if (removedIds.length > 0) {
     const { error } = await supabase.from('ogi_shift_requests').delete().in('id', removedIds);
-    if (error) { console.error(error); alert('期間変更の保存に失敗: ' + error.message); return; }
+    if (error) { console.error(error); alert('期間変更の保存に失敗: ' + error.message); await loadRequests(); return; }
   }
 
   closeModal();
@@ -1259,7 +1285,7 @@ async function handleModalDelete() {
   if (!confirm(label)) return;
 
   const { error } = await supabase.from('ogi_shift_requests').delete().in('id', deleteIds);
-  if (error) { console.error(error); alert('削除に失敗'); return; }
+  if (error) { console.error(error); alert('削除に失敗'); await loadRequests(); return; }
 
   closeModal();
   await loadRequests();

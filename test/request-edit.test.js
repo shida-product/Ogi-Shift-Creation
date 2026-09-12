@@ -5,6 +5,7 @@ import {
   enumerateDates,
   getRemovedRequestIds,
   getRequestChanges,
+  findRequestInDates,
   resolveEditingSource,
 } from '../js/request-edit.js';
 
@@ -100,6 +101,40 @@ test('編集モードでスタッフを変更した場合は元スタッフの�
     getRemovedRequestIds(source.removableRequests, 'staff-2', ['2026-09-20']),
     ['req-1'],
   );
+});
+
+test('選択範囲の先頭日が空でも、範囲内の既存希望を編集対象として見つける', () => {
+  const requests = [
+    { id: 'req-3', staff_id: 'staff-1', date: '2026-09-03', request_type: 'off', note: null },
+    { id: 'req-2', staff_id: 'staff-1', date: '2026-09-02', request_type: 'off', note: null },
+    { id: 'req-other', staff_id: 'staff-2', date: '2026-09-01', request_type: 'off', note: null },
+  ];
+
+  const found = findRequestInDates(requests, 'staff-1', enumerateDates('2026-09-01', '2026-09-03'));
+  assert.equal(found.id, 'req-2');   // 範囲内で最も早い日
+  assert.equal(findRequestInDates(requests, 'staff-1', ['2026-09-10']), null);
+});
+
+test('変更前の期間は、実際に希望が入っている日付だけで組み立てる', () => {
+  const existing = { id: 'req-3', staff_id: 'staff-1', date: '2026-09-03', request_type: 'off', note: null };
+
+  const source = resolveEditingSource({
+    mode: 'edit',
+    editingStaffId: 'staff-1',
+    editingRequest: existing,
+    editingDates: enumerateDates('2026-09-01', '2026-09-03'),  // ドラッグ範囲は3日分
+    targetDates: enumerateDates('2026-09-01', '2026-09-03'),
+    selectedStaffId: 'staff-1',
+    requests: [existing],
+  });
+
+  const before = createRequestSnapshot(
+    source.staffId,
+    source.originalRequests.map(r => r.date),
+    source.request.request_type,
+    source.request.note,
+  );
+  assert.deepEqual(before.dates, ['2026-09-03']);
 });
 
 test('新規登録で日付を変更しても、開いた日に入っている同一スタッフの希望を削除しない', () => {

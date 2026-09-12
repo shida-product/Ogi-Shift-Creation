@@ -2526,8 +2526,9 @@ function openCellEditor(cell, staff, dateStr) {
       }
 
       // DB更新
+      // supabase-js はDBエラーで throw せず { error } を返すため、必ず error を見る
       try {
-        await supabase.from('ogi_shift_assignments')
+        const { error } = await supabase.from('ogi_shift_assignments')
           .upsert({
             year_month: getCurrentYearMonth(),
             staff_id: staff.id,
@@ -2536,10 +2537,11 @@ function openCellEditor(cell, staff, dateStr) {
             work_pattern: newPattern,
             is_manual_override: true,
           }, { onConflict: 'staff_id,date' });
+        if (error) throw error;
         showToast('更新しました', 'success');
       } catch (err) {
         console.error(err);
-        showToast('更新に失敗', 'error');
+        showToast('更新に失敗: ' + (err?.message || ''), 'error');
       }
 
       editor.style.display = 'none';
