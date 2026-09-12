@@ -20,6 +20,7 @@ import {
   enumerateDates,
   getRemovedRequestIds,
   getRequestChanges,
+  resolveEditingSource,
 } from './request-edit.js';
 
 // ============================================================
@@ -135,6 +136,7 @@ const state = {
   editingDates: [],
   editingStaffId: null,
   editingRequest: null,
+  editingMode: 'edit',   // 'edit'=既存の希望を開いた / 'create'=新規登録
 };
 
 // ============================================================
@@ -201,7 +203,7 @@ function bindEvents() {
 
   // FAB：今日の日付でモーダルを開く
   document.getElementById('fab-add').addEventListener('click', () => {
-    openModal(state.selectedStaffId, [formatDate(new Date())]);
+    openModal(state.selectedStaffId || state.staffList[0]?.id, [formatDate(new Date())], 'create');
   });
 
   // 画面回転・リサイズ対応
@@ -847,7 +849,7 @@ function showDayDetail(dateStr) {
   // 新規登録ボタン → 登録モーダル（選択中スタッフ or 先頭スタッフ）
   document.getElementById('bottom-sheet-add').addEventListener('click', () => {
     closeBottomSheet();
-    openModal(state.selectedStaffId || state.staffList[0]?.id, [dateStr]);
+    openModal(state.selectedStaffId || state.staffList[0]?.id, [dateStr], 'create');
   });
 }
 
@@ -1037,9 +1039,10 @@ document.getElementById('modal-staff-select').addEventListener('change', (e) => 
   updateDispenseVisibility(e.target.value);
 });
 
-function openModal(staffId, dates) {
+function openModal(staffId, dates, mode = 'edit') {
   state.editingStaffId = staffId;
   state.editingDates = dates;
+  state.editingMode = mode;
 
   const staffSelect = document.getElementById('modal-staff-select');
   staffSelect.innerHTML = '';
@@ -1075,7 +1078,10 @@ function openModal(staffId, dates) {
   endInput.value = endDate;
 
   // 複数日でも先頭日付に既存データがあれば編集モード
-  const existing = state.requests.find(r => r.staff_id === staffId && r.date === dates[0]);
+  // 新規登録（mode='create'）では既定スタッフの既存希望を読み込まない
+  const existing = mode === 'edit'
+    ? state.requests.find(r => r.staff_id === staffId && r.date === dates[0])
+    : null;
   state.editingRequest = existing || null;
 
   if (existing) {
@@ -1118,6 +1124,7 @@ function closeModal() {
   state.editingDates = [];
   state.editingStaffId = null;
   state.editingRequest = null;
+  state.editingMode = 'edit';
 }
 
 async function handleModalSave() {
@@ -1143,15 +1150,22 @@ async function handleModalSave() {
   }
 
   const targetDates = enumerateDates(startStr, endStr);
-  const originalRequests = state.editingRequest
-    ? state.requests.filter(request => request.staff_id === state.editingStaffId && state.editingDates.includes(request.date))
-    : [];
-  const before = state.editingRequest
+  const source = resolveEditingSource({
+    mode: state.editingMode,
+    editingStaffId: state.editingStaffId,
+    editingRequest: state.editingRequest,
+    editingDates: state.editingDates,
+    targetDates,
+    selectedStaffId: staffId,
+    requests: state.requests,
+  });
+  const originalRequests = source.originalRequests;
+  const before = source.request
     ? createRequestSnapshot(
-      state.editingStaffId,
+      source.staffId,
       state.editingDates,
-      state.editingRequest.request_type,
-      state.editingRequest.note,
+      source.request.request_type,
+      source.request.note,
     )
     : null;
   const after = createRequestSnapshot(staffId, targetDates, type, note);
@@ -1197,8 +1211,8 @@ async function handleModalSave() {
       .map(request => request.created_at)
       .filter(Boolean)
       .sort()[0];
-    const originalHistory = Array.isArray(state.editingRequest?.change_history)
-      ? state.editingRequest.change_history
+    const originalHistory = Array.isArray(source.request?.change_history)
+      ? source.request.change_history
       : [];
     const rows = toInsert.map(d => ({
       staff_id: staffId, date: d, request_type: type,
@@ -1212,7 +1226,7 @@ async function handleModalSave() {
   }
 
   // 元の期間から外れた日を削除する（例: 9/16〜17 を 9/16 に短縮した場合の 9/17）。
-  const removedIds = getRemovedRequestIds(originalRequests, staffId, targetDates);
+  const removedIds = getRemovedRequestIds(source.removableRequests, staffId, targetDates);
   if (removedIds.length > 0) {
     const { error } = await supabase.from('ogi_shift_requests').delete().in('id', removedIds);
     if (error) { console.error(error); alert('期間変更の保存に失敗: ' + error.message); return; }
@@ -1225,7 +1239,7 @@ async function handleModalSave() {
 async function handleModalDelete() {
   if (!state.editingRequest) return;
 
-  const staffId = document.getElementById('modal-staff-select').value;
+  const staffId = state.editingStaffId;
   const startStr = document.getElementById('modal-date-start').value;
   const endStr = document.getElementById('modal-date-end').value;
 

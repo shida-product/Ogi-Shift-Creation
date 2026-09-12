@@ -71,3 +71,39 @@ function formatShortDate(dateStr) {
 function formatDate(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
+
+// 保存時に「変更前」として扱うレコードを解決する。
+// mode='edit'（既存の希望をタップして開いた）のときだけ、開いた時点のスタッフ・対象日を
+// 変更前として扱う（＝スタッフ変更や期間短縮は付け替えとみなし、元レコードを削除する）。
+// mode='create'（新規登録）のときは、モーダルの初期値はあくまで既定値なので、
+//   - スタッフは保存時に選択されているスタッフ
+//   - 日付はこれから保存する日（開いた日ではない）
+// だけを見る。これをしないと、
+//   - 既定スタッフ（一覧の先頭＝村上）の希望休が別スタッフの新規登録で削除される
+//   - 新規登録中に日付を変えると、開いた日に入っていた希望が削除される
+// といった誤削除が起きる。
+export function resolveEditingSource({
+  mode,
+  editingStaffId,
+  editingRequest,
+  editingDates = [],
+  targetDates = [],
+  selectedStaffId,
+  requests = [],
+}) {
+  const isEdit = mode === 'edit' && !!editingRequest;
+  const staffId = isEdit ? editingStaffId : selectedStaffId;
+  const scopeDates = new Set(isEdit ? editingDates : targetDates);
+  const scoped = requests
+    .filter(r => r.staff_id === staffId && scopeDates.has(r.date))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const request = isEdit ? editingRequest : (scoped[0] || null);
+
+  return {
+    staffId,
+    request,
+    originalRequests: request ? scoped : [],
+    // 新規登録では既存レコードを削除しない（保存対象日のものは UPDATE で上書きされる）
+    removableRequests: isEdit && request ? scoped : [],
+  };
+}

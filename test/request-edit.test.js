@@ -5,6 +5,7 @@ import {
   enumerateDates,
   getRemovedRequestIds,
   getRequestChanges,
+  resolveEditingSource,
 } from '../js/request-edit.js';
 
 test('2日間の希望を1日に短縮すると、期間外になったレコードを削除対象にする', () => {
@@ -38,4 +39,84 @@ test('期間・希望区分・備考の変更内容を具体的に組み立て�
 test('同じ内容を保存した場合は変更なしと判定する', () => {
   const snapshot = createRequestSnapshot('staff-1', ['2026-09-16'], 'off', null);
   assert.deepEqual(getRequestChanges(snapshot, snapshot), []);
+});
+
+test('新規登録で既定スタッフ（先頭）の既存希望を変更前として扱わない', () => {
+  const requests = [
+    { id: 'req-murakami', staff_id: 'staff-murakami', date: '2026-09-20', request_type: 'off', note: null },
+  ];
+
+  const source = resolveEditingSource({
+    mode: 'create',
+    editingStaffId: 'staff-murakami',   // モーダルの既定値（一覧の先頭）
+    editingRequest: null,
+    editingDates: ['2026-09-20'],
+    targetDates: ['2026-09-20'],
+    selectedStaffId: 'staff-other',     // 実際に登録するスタッフ
+    requests,
+  });
+
+  assert.equal(source.staffId, 'staff-other');
+  assert.equal(source.request, null);
+  assert.deepEqual(source.originalRequests, []);
+  assert.deepEqual(
+    getRemovedRequestIds(source.removableRequests, 'staff-other', enumerateDates('2026-09-20', '2026-09-20')),
+    [],
+  );
+});
+
+test('新規登録でも同じスタッフの既存希望は変更前として扱う', () => {
+  const existing = { id: 'req-1', staff_id: 'staff-1', date: '2026-09-20', request_type: 'off', note: null };
+
+  const source = resolveEditingSource({
+    mode: 'create',
+    editingStaffId: 'staff-1',
+    editingRequest: null,
+    editingDates: ['2026-09-20'],
+    targetDates: ['2026-09-20'],
+    selectedStaffId: 'staff-1',
+    requests: [existing],
+  });
+
+  assert.equal(source.request, existing);
+  assert.deepEqual(source.originalRequests, [existing]);
+});
+
+test('編集モードでスタッフを変更した場合は元スタッフのレコードを削除対象にする', () => {
+  const existing = { id: 'req-1', staff_id: 'staff-1', date: '2026-09-20', request_type: 'off', note: null };
+
+  const source = resolveEditingSource({
+    mode: 'edit',
+    editingStaffId: 'staff-1',
+    editingRequest: existing,
+    editingDates: ['2026-09-20'],
+    targetDates: ['2026-09-20'],
+    selectedStaffId: 'staff-2',
+    requests: [existing],
+  });
+
+  assert.equal(source.staffId, 'staff-1');
+  assert.deepEqual(
+    getRemovedRequestIds(source.removableRequests, 'staff-2', ['2026-09-20']),
+    ['req-1'],
+  );
+});
+
+test('新規登録で日付を変更しても、開いた日に入っている同一スタッフの希望を削除しない', () => {
+  const existing = { id: 'req-20', staff_id: 'staff-b', date: '2026-09-20', request_type: 'off', note: null };
+
+  // 9/20 の「新規登録」を既定スタッフAで開き、スタッフBを選んで日付を 9/21 に変更したケース
+  const source = resolveEditingSource({
+    mode: 'create',
+    editingStaffId: 'staff-a',
+    editingRequest: null,
+    editingDates: ['2026-09-20'],
+    targetDates: ['2026-09-21'],
+    selectedStaffId: 'staff-b',
+    requests: [existing],
+  });
+
+  assert.equal(source.request, null);
+  assert.deepEqual(source.removableRequests, []);
+  assert.deepEqual(getRemovedRequestIds(source.removableRequests, 'staff-b', ['2026-09-21']), []);
 });
