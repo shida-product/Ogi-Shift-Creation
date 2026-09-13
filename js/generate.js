@@ -308,8 +308,11 @@ function handleRedo() {
 
 async function handleReset() {
   if (!state.baselineAssignments) return;
-  state.assignments = cloneAssignments(state.baselineAssignments);
-  // 履歴をクリアして初期状態に戻す
+  // 生成直後相当へ戻し、手動フラグも必ず落とす
+  state.assignments = cloneAssignments(state.baselineAssignments).map(a => ({
+    ...a,
+    is_manual_override: false,
+  }));
   state.history = [cloneAssignments(state.assignments)];
   state.historyIndex = 0;
   await saveAssignments(getCurrentYearMonth(), state.assignments);
@@ -383,8 +386,19 @@ function bindEvents() {
 }
 
 let _syncAssignmentsInFlight = false;
+let _generatingInFlight = false;
+
+/** リモートの生成スナップショットがローカルより新しいか */
+function isGeneratedSnapshotNewer(remoteGen, localGen) {
+  const remoteAt = remoteGen?.[0]?.generated_at || '';
+  const localAt = localGen?.[0]?.generated_at || '';
+  if (!remoteAt) return false;
+  if (!localAt) return true;
+  return remoteAt > localAt;
+}
+
 async function syncAssignmentsFromDbIfChanged() {
-  if (_syncAssignmentsInFlight) return;
+  if (_syncAssignmentsInFlight || _generatingInFlight) return;
   const editor = document.getElementById('cell-editor');
   if (editor && editor.style.display !== 'none') return; // 編集中は上書きしない
 
@@ -415,7 +429,7 @@ async function syncAssignmentsFromDbIfChanged() {
     ]);
     if (assignRes.error) return;
     const remote = assignRes.data || [];
-    if (!generatedRes.error) state.generatedAssignments = generatedRes.data || [];
+    const remoteGenerated = generatedRes.error ? null : (generatedRes.data || []);
 
     if (remote.length === 0) {
       if (state.assignments.length > 0) await loadExistingAssignments();
@@ -423,7 +437,22 @@ async function syncAssignmentsFromDbIfChanged() {
     }
 
     const assignmentsChanged = !assignmentsContentEqual(remote, state.assignments);
-    if (!assignmentsChanged && !requestsChanged) return;
+
+    // 生成スナップショットは新しいときだけ取り込む（古い上書きで差分マークが残るのを防ぐ）
+    let generatedChanged = false;
+    if (remoteGenerated) {
+      if (assignmentsChanged) {
+        if (!isGeneratedSnapshotNewer(state.generatedAssignments, remoteGenerated)) {
+          state.generatedAssignments = remoteGenerated;
+          generatedChanged = true;
+        }
+      } else if (isGeneratedSnapshotNewer(remoteGenerated, state.generatedAssignments)) {
+        state.generatedAssignments = remoteGenerated;
+        generatedChanged = true;
+      }
+    }
+
+    if (!assignmentsChanged && !requestsChanged && !generatedChanged) return;
 
     if (assignmentsChanged) {
       state.assignments = remote;
@@ -433,10 +462,12 @@ async function syncAssignmentsFromDbIfChanged() {
     renderConditionsCheck();
     renderOtherList();
     renderDiffPanel();
-    showToast(
-      assignmentsChanged ? '他の端末の変更を反映しました' : '希望休の変更を反映しました',
-      'success',
-    );
+    if (assignmentsChanged || requestsChanged) {
+      showToast(
+        assignmentsChanged ? '他の端末の変更を反映しました' : '希望休の変更を反映しました',
+        'success',
+      );
+    }
   } catch (e) {
     console.error(e);
   } finally {
@@ -792,6 +823,7 @@ async function handleGenerate() {
   const btn = document.getElementById('btn-generate');
   btn.disabled = true;
   btn.innerHTML = '<span class="loader"></span> 生成中...';
+  _generatingInFlight = true;
 
   try {
     const yearMonth = getCurrentYearMonth();
@@ -822,15 +854,22 @@ async function handleGenerate() {
       }
     }
 
-    // 常に新規生成結果を採用（気に入らなければundo/resetで戻せる）
-    state.assignments = bestAssignments;
-    state.warnings = bestWarnings;
-    state.lastScore = bestScore;
-    state.lastBreakdown = bestBreakdown;
-    await saveAssignments(yearMonth, bestAssignments);
+    // 生成直後＝リセット相当：手動フラグなし・差分なしのクリーン状態で保存
     const generatedAt = new Date().toISOString();
-    await saveGeneratedAssignments(yearMonth, bestAssignments, generatedAt);
-    state.generatedAssignments = bestAssignments.map(a => ({
+    const clean = bestAssignments.map(a => ({
+      year_month: a.year_month,
+      staff_id: a.staff_id,
+      date: a.date,
+      attendance_type: a.attendance_type,
+      work_pattern: a.work_pattern || '',
+      is_manual_override: false,
+    }));
+
+    await saveAssignments(yearMonth, clean);
+    await saveGeneratedAssignments(yearMonth, clean, generatedAt);
+
+    state.assignments = clean;
+    state.generatedAssignments = clean.map(a => ({
       year_month: a.year_month,
       staff_id: a.staff_id,
       date: a.date,
@@ -838,24 +877,27 @@ async function handleGenerate() {
       work_pattern: a.work_pattern || '',
       generated_at: generatedAt,
     }));
+    state.warnings = bestWarnings;
+    state.lastScore = bestScore;
+    state.lastBreakdown = bestBreakdown;
+    state.hasGenerated = true;
+    state.baselineAssignments = cloneAssignments(clean);
+    state.history = [cloneAssignments(clean)];
+    state.historyIndex = 0;
+    updateUndoRedoButtons();
+    saveHistoryToLocal();
+
     console.log(`シフト生成完了 スコア: ${bestScore}`, bestBreakdown);
 
-    state.hasGenerated = true;
     document.getElementById('btn-csv').disabled = false;
     renderGantt();
     renderConditionsCheck();
     renderDiffPanel();
-
-    // baseline保存 + 履歴初期化
-    state.baselineAssignments = cloneAssignments(state.assignments);
-    state.history = [cloneAssignments(state.assignments)];
-    state.historyIndex = 0;
-    updateUndoRedoButtons();
-    saveHistoryToLocal();
   } catch (err) {
     console.error(err);
     showToast('生成エラー: ' + err.message, 'error');
   } finally {
+    _generatingInFlight = false;
     btn.disabled = false;
     btn.innerHTML = '<i data-lucide="sparkles" style="width:16px;height:16px;"></i> シフト生成';
     lucide.createIcons();
