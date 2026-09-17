@@ -8,7 +8,7 @@
 
 import { supabase } from './supabase-config.js';
 import {
-  getDefaultViewMonth,
+  getDefaultGenerateMonth,
   getCalendarMonthClamped,
   getMonthWindow,
   isMonthInWindow,
@@ -167,7 +167,7 @@ function getHolidays(year) {
 // ============================================================
 // 状態管理
 // ============================================================
-const _initView = getDefaultViewMonth();
+const _initView = getDefaultGenerateMonth();
 
 const state = {
   staffList: [],

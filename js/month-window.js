@@ -46,6 +46,12 @@ export function getDefaultViewMonth(now = new Date()) {
   return clampToMonthWindow(target.year, target.month, now);
 }
 
+/** シフト生成の対象月（表示用）。常に翌月（15日締め切り後のシフト作成期間に対応） */
+export function getDefaultGenerateMonth(now = new Date()) {
+  const target = addMonths(now.getFullYear(), now.getMonth(), 1);
+  return clampToMonthWindow(target.year, target.month, now);
+}
+
 /** カレンダー上の「今月」（窓内にクランプ） */
 export function getCalendarMonthClamped(now = new Date()) {
   return clampToMonthWindow(now.getFullYear(), now.getMonth(), now);
