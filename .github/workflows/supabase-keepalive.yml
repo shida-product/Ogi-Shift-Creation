@@ -16,18 +16,19 @@ jobs:
     steps:
       - name: Ping Supabase API
         env:
+          # 値は GitHub Secrets（Settings → Secrets and variables → Actions）で管理する
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: |
           if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
-            echo "::error::Secrets SUPABASE_URL / SUPABASE_ANON_KEY が未設定です"
+            echo "::error::Secrets SUPABASE_URL / SUPABASE_ANON_KEY が未設定です。Settings → Secrets and variables → Actions で登録してください。"
             exit 1
           fi
 
           echo "Sending keep-alive request to Supabase..."
           # --fail で HTTP 4xx/5xx を失敗として検出する（従来は常に成功表示だった）
-          curl -sS --fail -X GET "$SUPABASE_URL/rest/v1/staff?select=id&limit=1" \
+          curl -sS --fail -o /dev/null -X GET "${SUPABASE_URL%/}/rest/v1/staff?select=id&limit=1" \
             -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" > /dev/null
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY"
 
           echo "Keep-alive ping successful!"
