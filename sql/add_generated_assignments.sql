@@ -28,10 +28,15 @@ BEGIN
     SELECT 1 FROM pg_policies
     WHERE schemaname = 'public'
       AND tablename = 'ogi_shift_generated_assignments'
-      AND policyname = 'Allow all access to ogi_shift_generated_assignments'
+      AND policyname = 'ogi account only'
   ) THEN
-    CREATE POLICY "Allow all access to ogi_shift_generated_assignments"
+    -- 2026-10-24 に本番の旧ポリシー "Allow all access to ..."（全許可）を廃止し、これに置き換えた
+    CREATE POLICY "ogi account only"
       ON public.ogi_shift_generated_assignments
-      FOR ALL USING (true) WITH CHECK (true);
+      FOR ALL TO authenticated
+      USING ((auth.jwt() ->> 'email') = 'ogi@shift.com')
+      WITH CHECK ((auth.jwt() ->> 'email') = 'ogi@shift.com');
   END IF;
 END $$;
+
+REVOKE ALL ON public.ogi_shift_generated_assignments FROM anon;
