@@ -27,8 +27,8 @@ jobs:
 
           echo "Sending keep-alive request to Supabase..."
           # --fail で HTTP 4xx/5xx を失敗として検出する（従来は常に成功表示だった）
-          curl -sS --fail -o /dev/null -X GET "${SUPABASE_URL%/}/rest/v1/ogi_staff?select=id&limit=1" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY"
+          # テーブルは RLS と権限で anon から読めないため、Auth の health を叩く
+          curl -sS --fail -o /dev/null -X GET "${SUPABASE_URL%/}/auth/v1/health" \
+            -H "apikey: $SUPABASE_ANON_KEY"
 
           echo "Keep-alive ping successful!"
