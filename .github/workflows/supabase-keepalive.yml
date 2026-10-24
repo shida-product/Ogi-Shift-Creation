@@ -27,7 +27,7 @@ jobs:
 
           echo "Sending keep-alive request to Supabase..."
           # --fail で HTTP 4xx/5xx を失敗として検出する（従来は常に成功表示だった）
-          curl -sS --fail -o /dev/null -X GET "${SUPABASE_URL%/}/rest/v1/staff?select=id&limit=1" \
+          curl -sS --fail -o /dev/null -X GET "${SUPABASE_URL%/}/rest/v1/ogi_staff?select=id&limit=1" \
             -H "apikey: $SUPABASE_ANON_KEY" \
             -H "Authorization: Bearer $SUPABASE_ANON_KEY"
 
