@@ -22,7 +22,7 @@
 | `generate.html` | 自動生成、条件チェック、ガント表示、セル単位の手動調整、Undo/Redo/Reset、生成時点との差分確認、CSV出力 |
 | `admin.html` | スタッフ追加・編集、有効状態・配属・勤務条件・優先順位、月別公休数の管理 |
 
-`index.html`、`generate.html`、`admin.html` は `js/auth.js` によるセッション確認とログアウト導線を持ちます。**画面上のログイン制御とDBのアクセス制御は別の問題**です。現在の本番SupabaseのRLSポリシーは未確認のため、本番の保護状態をこのREADMEだけで保証しません。
+`index.html`、`generate.html`、`admin.html` は `js/auth.js` によるセッション確認とログアウト導線を持ちます。**画面上のログイン制御とDBのアクセス制御は別の問題**です。DB 側は RLS で `ogi@shift.com` のログインに限定しています（下記「セキュリティと公開時の注意」）。
 
 ### 希望登録・対象月
 
@@ -95,8 +95,9 @@ npm test
 ## セキュリティと公開時の注意
 
 - 実スタッフの勤務希望・シフト情報を取り扱います。権限を確認せず本番DBや勤務条件を変更しないでください
-- `sql/enable_rls.sql` には、旧方式を前提とした **anonロールへの全件読み書き許可** が記載されています。画面はSupabase Authを利用する構成へ変わっていますが、**このSQLを現在の本番保護ポリシーとして適用・再適用してはいけません**。現在の本番RLSと各ポリシーは別途監査してください
-- `.github/workflows/supabase-keepalive.yml` の接続情報・認証トークンの管理も別途監査対象です。公開されている値が運用上有効ならローテーションを検討してください
+- **本番のRLS（2026-10-24 にユーザーが SQL Editor で適用・確認）**: ogi の5テーブル（`ogi_staff` / `ogi_shift_requests` / `ogi_shift_assignments` / `ogi_shift_generated_assignments` / `ogi_monthly_settings`）は、ポリシー `ogi account only`（authenticated かつ email = `ogi@shift.com` のみ全操作）だけを持ち、anon の権限は revoke 済み。未ログインのアクセスは permission denied になります。新規サインアップは無効です。定義は `sql/enable_rls.sql`（新規テーブルは `sql/add_generated_assignments.sql` と同じ形で追加）
+- 旧定義の全許可ポリシー `Allow all access to <table>` は削除済みです。git 履歴から**旧SQLを再適用しないでください**
+- `.github/workflows/supabase-keepalive.yml` の接続情報は GitHub Secrets で管理し、テーブルではなく `/auth/v1/health` を叩きます。過去のコミット履歴には anon キーが残りますが、anon は上記の通り各テーブルにアクセスできません
 - 実スタッフ名を含む設定・ドキュメントは公開範囲を見直してください。ポートフォリオやデモには架空データと隔離した環境を使ってください
 - このREADMEは**コードとの仕様照合**を記載するもので、セキュリティ監査や稼働保証ではありません
 
